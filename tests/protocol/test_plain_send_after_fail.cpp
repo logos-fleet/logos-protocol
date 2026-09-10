@@ -142,23 +142,23 @@ struct Rob {
 };
 
 struct ConnMuTag {
-    using type = std::mutex LocalConn::*;
+    using type = std::mutex RpcPeer::*;
     friend type get(ConnMuTag);
 };
-template struct Rob<ConnMuTag, &LocalConn::m_mu>;
+template struct Rob<ConnMuTag, &RpcPeer::m_mu>;
 
 struct PendingCallsTag {
-    using type = std::map<std::uint64_t, RpcConnectionBase::ResultHandler> LocalConn::*;
+    using type = std::map<std::uint64_t, RpcConnectionBase::ResultHandler> RpcPeer::*;
     friend type get(PendingCallsTag);
 };
-template struct Rob<PendingCallsTag, &LocalConn::m_pendingCalls>;
+template struct Rob<PendingCallsTag, &RpcPeer::m_pendingCalls>;
 
 struct PendingMethodsTag {
     using type = std::map<std::uint64_t,
-                          std::shared_ptr<std::promise<MethodsResultMessage>>> LocalConn::*;
+                          std::shared_ptr<std::promise<MethodsResultMessage>>> RpcPeer::*;
     friend type get(PendingMethodsTag);
 };
-template struct Rob<PendingMethodsTag, &LocalConn::m_pendingMethods>;
+template struct Rob<PendingMethodsTag, &RpcPeer::m_pendingMethods>;
 
 // A provider on the far end of the socketpair that answers everything at once.
 // It exists so the warm-up call in the object-level test completes for real;

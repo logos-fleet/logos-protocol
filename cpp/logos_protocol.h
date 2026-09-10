@@ -29,8 +29,9 @@
  *   - Handles are thread-safe per-handle: calls on one handle may be made
  *     from any thread; the library marshals to the handle's owner thread
  *     internally where required.
- *   - Qt-free transports (plain tcp/tcp_ssl, mock) are serviced by the
- *     library's own workers — no caller event loop is needed.
+ *   - Qt-free transports (plain tcp/tcp_ssl, web, mock) are serviced by the
+ *     library's own workers or by the message channel they were handed — no
+ *     caller event loop is needed.
  *   - The Qt Remote Objects transport (the current default inside module
  *     processes) ADDITIONALLY requires a running Qt event loop in the
  *     process. Every Logos module process has one (logos_host runs it).
@@ -81,6 +82,28 @@
 // cannot evaluate. logos-rust-sdk already gets this right by comparing the
 // tuple (major, minor).
 #define LOGOS_PROTOCOL_VERSION_MAJOR 0
+// 0.10: a fourth transport — `{"protocol":"web"}` (LogosProtocol::Web), the
+// plain transport's message set (Call, Result, Subscribe, Unsubscribe, Event,
+// Token, Methods, MethodsResult) carried as JSON over an injected message
+// channel with no byte framing, for a module living inside a webview (ADR
+// 0005). ModuleProxy sees it as transport tag "web", alongside "local", "tcp"
+// and "tcp_ssl".
+//
+// ADDITIVE, and at the ABI level there is nothing new to be additive ABOUT:
+// this MINOR adds no lp_* function and no module-impl export. It is a new VALUE
+// in an existing enum plus a new spelling accepted by lp_set_default_transport
+// / lp_client_create's transport JSON, so every pre-0.10 caller compiles,
+// links and loads unchanged, and a pre-0.10 image simply never asks for "web"
+// (its parser falls back to "local", which is the behaviour it already had for
+// any unknown protocol string).
+//
+// WHY A MINOR RATHER THAN A PATCH, since no symbol moved: a participant that
+// does not have this cut cannot TALK to a Web module at all — the tag it would
+// have to authorize against does not exist in its ModuleProxy, and the
+// transport it would have to resolve does not exist in its factory. That is a
+// capability difference between two same-MAJOR participants, which is exactly
+// what MINOR is for, and it is what a host checks before offering to run one.
+//
 // 0.6: the caller of a dispatch — logos_module_set_call_caller()
 // (logos_module_impl.h), which carries WHO is calling into the module image for
 // the duration of one dispatch, plus the host half that produces the document
@@ -267,9 +290,9 @@
 // name and mis-call it with no diagnostic. The generation counter is maintained
 // for EVERY client, so gap detection reaches a consumer that changes nothing;
 // only the live callback is opt-in.
-#define LOGOS_PROTOCOL_VERSION_MINOR 9
+#define LOGOS_PROTOCOL_VERSION_MINOR 10
 #define LOGOS_PROTOCOL_VERSION_PATCH 0
-#define LOGOS_PROTOCOL_VERSION_STRING "0.9.0"
+#define LOGOS_PROTOCOL_VERSION_STRING "0.10.0"
 
 // FEATURE MACRO, because the version macros cannot answer this one. Both 0.9
 // cuts report MINOR 9, so `MINOR >= 9` is true of a protocol that has these
@@ -354,6 +377,7 @@ LP_API const char* lp_get_mode(void);
 
 /** Set the process-global default transport from a JSON object, e.g.
  *    {"protocol":"local"}
+ *    {"protocol":"web"}
  *    {"protocol":"tcp","host":"127.0.0.1","port":6001,"codec":"json"}
  *    {"protocol":"tcp_ssl","host":"...","port":6443,"codec":"cbor",
  *     "ca_file":"...","cert_file":"...","key_file":"...","verify_peer":true}

@@ -33,6 +33,17 @@ namespace logos::web {
 // stop() or destruction tear it down. start() installs the channel receiver;
 // teardown removes it and waits for any in-flight delivery, so no callback can
 // reach a handler its owner has already destroyed.
+//
+// ONE GAP, RECORDED RATHER THAN PAPERED OVER: a channel that CLOSES does not
+// fail the far peer's pending calls, so they wait out their own deadlines
+// instead of being answered at once. The framed transport learns this from the
+// socket — a read completes with an error and fail() sweeps every waiter —
+// and IMessageChannel has no equivalent notification. Adding one belongs with
+// the host that owns the webview lifecycle (it is the only thing that knows a
+// page went away and whether a reload should re-attach), not here, so this
+// interface is left alone until that slice. The visible symptom until then is
+// latency on a dead channel, never a wrong answer: every waiter is still
+// answered exactly once, by its deadline.
 // -----------------------------------------------------------------------------
 class WebRpcConnection : public logos::plain::RpcPeer {
 public:

@@ -75,7 +75,8 @@ class ModuleProxy : public QObject
 
 public:
     // A host-installed extra authorizer. Returns true if `token` is valid for a
-    // call arriving over `transportProtocol` ("local" | "tcp" | "tcp_ssl").
+    // call arriving over `transportProtocol` ("local" | "tcp" | "tcp_ssl" |
+    // "web").
     // Consulted IN ADDITION to the built-in issued-token scan, so installing one
     // only ever grants access to tokens the built-in scan wouldn't (e.g. the
     // daemon backs it with TokenStore::lookupByToken to make operator-issued
@@ -110,9 +111,9 @@ public:
     // and does not apply C++ default arguments, so the existing QtRO/local
     // 3-arg call must remain a real 3-arg method. It forwards to the
     // transport-aware 4-arg form with "local" (RemoteTransportHost is always
-    // local); remote hosts that know their wire (PlainTransportHost) call the
-    // 4-arg form so a transport-sensitive validator (local_only tokens) can
-    // enforce it.
+    // local); remote hosts that know their wire (PlainTransportHost, tagging
+    // "tcp"/"tcp_ssl", and WebTransportHost, tagging "web") call the 4-arg form
+    // so a transport-sensitive validator (local_only tokens) can enforce it.
     Q_INVOKABLE QVariant callRemoteMethod(const QString& authToken, const QString& methodName, const QVariantList& args = QVariantList());
     Q_INVOKABLE QVariant callRemoteMethod(const QString& authToken, const QString& methodName, const QVariantList& args, const QString& transportProtocol);
     Q_INVOKABLE bool informModuleToken(const QString& authToken, const QString& moduleName, const QString& token);

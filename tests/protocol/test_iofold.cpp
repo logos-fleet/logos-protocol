@@ -469,16 +469,16 @@ template struct Rob<ConnTag, &PlainLogosObject::m_conn>;
 using TcpConn = RpcConnection<boost::asio::ip::tcp::socket>;
 
 struct PendingCallsTag {
-    using type = std::map<std::uint64_t, RpcConnectionBase::ResultHandler> TcpConn::*;
+    using type = std::map<std::uint64_t, RpcConnectionBase::ResultHandler> RpcPeer::*;
     friend type get(PendingCallsTag);
 };
-template struct Rob<PendingCallsTag, &TcpConn::m_pendingCalls>;
+template struct Rob<PendingCallsTag, &RpcPeer::m_pendingCalls>;
 
 struct ConnMuTag {
-    using type = std::mutex TcpConn::*;
+    using type = std::mutex RpcPeer::*;
     friend type get(ConnMuTag);
 };
-template struct Rob<ConnMuTag, &TcpConn::m_mu>;
+template struct Rob<ConnMuTag, &RpcPeer::m_mu>;
 
 struct Registries {
     size_t inflight;

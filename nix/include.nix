@@ -23,13 +23,14 @@ pkgs.stdenv.mkDerivation {
     mkdir -p $out/include/cpp/implementations/qt_remote
     mkdir -p $out/include/cpp/implementations/mock
     mkdir -p $out/include/cpp/implementations/plain
+    mkdir -p $out/include/cpp/implementations/web
 
     # Top-level headers + sources (source-export layout)
     for file in cpp/*.h cpp/*.cpp; do
       cp "$file" $out/include/cpp/
     done
 
-    for dir in qt_local qt_remote mock plain; do
+    for dir in qt_local qt_remote mock plain web; do
       for file in cpp/implementations/$dir/*; do
         cp "$file" $out/include/cpp/implementations/$dir/
       done

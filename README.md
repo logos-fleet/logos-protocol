@@ -21,8 +21,10 @@ versioned boundary instead of re-wrapping the C++/Qt SDK.
   `lp_protocol_abi_major()`). JSON-in-strings data model; bytes cross the
   boundary as `{"_bytes":"<base64url>"}` (lossless, NUL-safe).
 - **Transports** — plain TCP / TCP+TLS (Boost.Asio + OpenSSL + nlohmann,
-  Qt-free), `qt_local`, in-memory mock, and Qt Remote Objects
-  (`qt_remote` — the only Qt-bearing transport).
+  Qt-free), `web` (the same message set as JSON over an injected message
+  channel, for a module inside a webview — no byte framing), `qt_local`,
+  in-memory mock, and Qt Remote Objects (`qt_remote` — the only Qt-bearing
+  transport).
 - **Consumer core** — `LogosAPIClient` / `LogosAPIConsumer` including the
   automatic `capability_module.requestModule` token-fetch flow (behind the
   protocol boundary: every language gets it for free).

@@ -416,6 +416,11 @@ add_executable(protocol_tests
     # them detect the original bug (a caller's token filed as an outbound
     # credential) and two detect its fleet-fatal overcorrection.
     test_inbound_door.cpp
+    # The web transport: the plain message set as JSON over an injected message
+    # channel, driven end to end through an in-memory pair. Covers the round
+    # trips, the "web" transport tag ModuleProxy authorizes against, and the
+    # plain transport's size cap holding on a wire that has no length prefix.
+    test_web_transport.cpp
     # test_plain_transport_tcp.cpp — entirely #if 0 (see the note inside:
     # in-process Qt-event-loop deadlock between consumer + provider under
     # nix's test sandbox; exercised cross-process by the integration matrix).

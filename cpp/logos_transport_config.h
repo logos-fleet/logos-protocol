@@ -18,6 +18,13 @@ enum class LogosProtocol {
     LocalSocket,   // QLocalSocket via QRemoteObjects (existing code path)
     Tcp,           // Plain TCP (Boost.Asio + JSON framing)
     TcpSsl,        // TCP + TLS (Boost.Asio + OpenSSL + JSON framing)
+    // The plain message set as JSON over an injected message channel — a
+    // webview's postMessage, a custom-scheme pump — with no byte framing,
+    // because a message channel already delivers whole messages. There is no
+    // address to configure: the channel is handed to the transport (see
+    // implementations/web/message_channel.h), which is also what makes a Web
+    // module's identity structural rather than token-borne (ADR 0005).
+    Web,
     // Noise, Quic — future work
 };
 

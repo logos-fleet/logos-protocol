@@ -100,6 +100,9 @@ set(PROTOCOL_SOURCES
     implementations/plain/rpc_framing.h
     implementations/plain/rpc_framing.cpp
     implementations/plain/incoming_call_handler.h
+    implementations/plain/rpc_connection_base.h
+    implementations/plain/rpc_peer.h
+    implementations/plain/rpc_peer.cpp
     implementations/plain/rpc_connection.h
     implementations/plain/rpc_server.h
     implementations/plain/rpc_server.cpp
@@ -113,6 +116,21 @@ set(PROTOCOL_SOURCES
     implementations/plain/plain_transport_host.cpp
     implementations/plain/plain_transport_connection.h
     implementations/plain/plain_transport_connection.cpp
+    # The web transport: the same message set as JSON over an injected message
+    # channel (no byte framing). Shares RpcPeer and PlainLogosObject with the
+    # plain stack — what differs is only how a message reaches the wire.
+    implementations/web/message_channel.h
+    implementations/web/message_channel.cpp
+    implementations/web/in_memory_channel.h
+    implementations/web/in_memory_channel.cpp
+    implementations/web/web_message_codec.h
+    implementations/web/web_message_codec.cpp
+    implementations/web/web_rpc_connection.h
+    implementations/web/web_rpc_connection.cpp
+    implementations/web/web_transport_host.h
+    implementations/web/web_transport_host.cpp
+    implementations/web/web_transport_connection.h
+    implementations/web/web_transport_connection.cpp
 )
 
 add_library(logos_protocol STATIC ${PROTOCOL_SOURCES})
@@ -149,11 +167,13 @@ target_include_directories(logos_protocol PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/qt_remote>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/mock>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/web>
     $<INSTALL_INTERFACE:include>
     $<INSTALL_INTERFACE:include/implementations/qt_local>
     $<INSTALL_INTERFACE:include/implementations/qt_remote>
     $<INSTALL_INTERFACE:include/implementations/mock>
     $<INSTALL_INTERFACE:include/implementations/plain>
+    $<INSTALL_INTERFACE:include/implementations/web>
 )
 
 set_target_properties(logos_protocol PROPERTIES
@@ -217,11 +237,13 @@ target_include_directories(logos_protocol_shared PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/qt_remote>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/mock>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/web>
     $<INSTALL_INTERFACE:include>
     $<INSTALL_INTERFACE:include/implementations/qt_local>
     $<INSTALL_INTERFACE:include/implementations/qt_remote>
     $<INSTALL_INTERFACE:include/implementations/mock>
     $<INSTALL_INTERFACE:include/implementations/plain>
+    $<INSTALL_INTERFACE:include/implementations/web>
 )
 
 # Same basename as the archive (liblogos_protocol.{so,dylib}); the LIBRARY
@@ -361,6 +383,16 @@ install(FILES
     implementations/plain/json_codec.h
     implementations/plain/rpc_framing.h
     DESTINATION include/implementations/plain
+)
+
+# The web transport's injection seam. A host that owns a webview needs these to
+# hand the transport a channel; the connection/host classes themselves are
+# reached through the transport factory and stay internal.
+install(FILES
+    implementations/web/message_channel.h
+    implementations/web/in_memory_channel.h
+    implementations/web/web_message_codec.h
+    DESTINATION include/implementations/web
 )
 
 install(FILES

@@ -14,6 +14,7 @@ const char* protocolToString(LogosProtocol p)
     case LogosProtocol::LocalSocket: return "local";
     case LogosProtocol::Tcp:         return "tcp";
     case LogosProtocol::TcpSsl:      return "tcp_ssl";
+    case LogosProtocol::Web:         return "web";
     }
     return "local";
 }
@@ -22,6 +23,7 @@ LogosProtocol protocolFromString(const std::string& s)
 {
     if (s == "tcp")     return LogosProtocol::Tcp;
     if (s == "tcp_ssl") return LogosProtocol::TcpSsl;
+    if (s == "web")     return LogosProtocol::Web;
     return LogosProtocol::LocalSocket;
 }
 
@@ -48,7 +50,12 @@ std::string transportSetToJsonString(const LogosTransportSet& set)
     for (const auto& cfg : set) {
         json o;
         o["protocol"] = protocolToString(cfg.protocol);
-        if (cfg.protocol != LogosProtocol::LocalSocket) {
+        // LocalSocket has a derived socket path and Web has an injected
+        // channel; neither has an address a peer could be told about, and Web
+        // has exactly one encoding (see web_message_codec.h), so emitting
+        // host/port/codec for either would be inventing configuration.
+        if (cfg.protocol != LogosProtocol::LocalSocket
+            && cfg.protocol != LogosProtocol::Web) {
             o["host"]  = cfg.host;
             o["port"]  = cfg.port;
             o["codec"] = codecToString(cfg.codec);

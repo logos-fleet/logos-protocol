@@ -37,6 +37,7 @@
 
 #include "rpc_framing.h"
 
+#include "incoming_call_handler.h"
 #include "in_memory_channel.h"
 #include "web_message_codec.h"
 #include "web_transport_connection.h"
@@ -53,8 +54,10 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace logos::web;
 
@@ -487,4 +490,142 @@ TEST_F(WebTransportTest, AMalformedMessageEndsTheConversationWithoutWedgingTheCh
     // Reaching here at all is the other half: a wedged pump never returns from
     // its delivery, so the fixture's teardown — which joins that thread — would
     // hang instead of failing.
+}
+
+// ── ONE CHANNEL, BOTH DIRECTIONS ─────────────────────────────────────────────
+//
+// A Web module is not only something the host calls: a page has to be able to
+// call BACK — `capability_module.requestModule` for a token, another module's
+// method, a subscription to a native module's event. All of that is inbound
+// traffic on the very channel the host already holds for its own outbound
+// calls, and a second WebRpcConnection cannot be laid over that channel: each
+// one installs the channel's single receiver, so the second silently steals
+// every message from the first.
+//
+// The conversation was always full duplex — RpcPeer serves whatever
+// IncomingCallHandler it was given while its own calls are in flight, and the
+// browser SDK's WebPeer is one object for both roles too. Only the CONSUMER
+// entry point refused to say so, hard-wiring a null handler. So the door is a
+// second constructor argument rather than a new class: hand the connection a
+// handler and it serves the far end as well as consuming it.
+TEST_F(WebTransportTest, AConnectionWithAHandlerServesTheFarEndToo)
+{
+    // What the host offers a page: one method, one introspection answer, and a
+    // sink to push events into.
+    struct HostSide : logos::plain::IncomingCallHandler {
+        void onCall(const logos::plain::CallMessage& req, CallReply reply) override
+        {
+            lastObject = req.object;
+            lastMethod = req.method;
+            lastAuthToken = req.authToken;
+            logos::plain::ResultMessage res;
+            res.id = req.id;
+            res.ok = true;
+            res.value = logos::plain::RpcValue(int64_t{42});
+            reply(std::move(res));
+        }
+        void onMethods(const logos::plain::MethodsMessage& req, MethodsReply reply) override
+        {
+            logos::plain::MethodsResultMessage res;
+            res.id = req.id;
+            res.ok = true;
+            logos::plain::MethodMetadata m;
+            m.name = "requestModule";
+            res.methods = { m };
+            reply(std::move(res));
+        }
+        void onSubscribe(const logos::plain::SubscribeMessage& req, EventSink s,
+                         const void*) override
+        {
+            subscribedTo = req.object + "/" + req.eventName;
+            sink = std::move(s);
+        }
+        void onUnsubscribe(const logos::plain::UnsubscribeMessage&, const void*) override {}
+        void onConnectionClosed(const void*) override { sink = nullptr; }
+        void onToken(const logos::plain::TokenMessage& req) override
+        {
+            tokenFor = req.moduleName;
+        }
+
+        std::string lastObject, lastMethod, lastAuthToken, subscribedTo, tokenFor;
+        EventSink sink;
+    } host;
+
+    auto pair = makeInMemoryChannelPair();
+    WebTransportConnection conn(pair.first, &host);
+    ASSERT_TRUE(conn.connectToHost());
+
+    // The far end is raw, because that is what a page is from here: whole JSON
+    // envelopes on a channel, encoded and decoded by the transport's own codec.
+    std::mutex mu;
+    std::vector<logos::plain::AnyMessage> fromHost;
+    pair.second->setReceiver([&](const std::string& text) {
+        std::lock_guard<std::mutex> g(mu);
+        fromHost.push_back(decodeWebMessage(text));
+    });
+    auto received = [&](auto pick) {
+        std::lock_guard<std::mutex> g(mu);
+        for (auto& m : fromHost) if (pick(m)) return true;
+        return false;
+    };
+
+    // ── page → host: a call ──────────────────────────────────────────────────
+    logos::plain::CallMessage call;
+    call.id = 7;
+    call.object = "capability_module";
+    call.method = "requestModule";
+    call.authToken = "the-page-credential";
+    ASSERT_TRUE(pair.second->send(encodeWebMessage(logos::plain::AnyMessage{call})));
+
+    ASSERT_TRUE(waitFor([&] {
+        return received([](const logos::plain::AnyMessage& m) {
+            auto* r = std::get_if<logos::plain::ResultMessage>(&m);
+            return r && r->id == 7 && r->ok;
+        });
+    }, 2000)) << "a call from the far end was never answered";
+    EXPECT_EQ(host.lastObject, "capability_module");
+    EXPECT_EQ(host.lastMethod, "requestModule");
+    EXPECT_EQ(host.lastAuthToken, "the-page-credential")
+        << "the credential a page presents has to survive the crossing";
+
+    // ── page → host: introspection and a token push ──────────────────────────
+    logos::plain::MethodsMessage q;
+    q.id = 8;
+    q.object = "capability_module";
+    ASSERT_TRUE(pair.second->send(encodeWebMessage(logos::plain::AnyMessage{q})));
+    ASSERT_TRUE(waitFor([&] {
+        return received([](const logos::plain::AnyMessage& m) {
+            auto* r = std::get_if<logos::plain::MethodsResultMessage>(&m);
+            return r && r->id == 8 && r->methods.size() == 1;
+        });
+    }, 2000));
+
+    logos::plain::TokenMessage tok;
+    tok.moduleName = "js_counter";
+    tok.token = "pair-token";
+    ASSERT_TRUE(pair.second->send(encodeWebMessage(logos::plain::AnyMessage{tok})));
+    EXPECT_TRUE(waitFor([&] { return host.tokenFor == "js_counter"; }, 2000));
+
+    // ── page → host: a subscription, and the event that answers it ───────────
+    logos::plain::SubscribeMessage sub;
+    sub.object = "clock_module";
+    sub.eventName = "ticked";
+    ASSERT_TRUE(pair.second->send(encodeWebMessage(logos::plain::AnyMessage{sub})));
+    ASSERT_TRUE(waitFor([&] { return host.sink != nullptr; }, 2000))
+        << "a Subscribe from the far end never reached the handler";
+    EXPECT_EQ(host.subscribedTo, "clock_module/ticked");
+
+    logos::plain::EventMessage ev;
+    ev.object = "clock_module";
+    ev.eventName = "ticked";
+    ev.data = { logos::plain::RpcValue(int64_t{1}) };
+    host.sink(ev);
+    EXPECT_TRUE(waitFor([&] {
+        return received([](const logos::plain::AnyMessage& m) {
+            auto* e = std::get_if<logos::plain::EventMessage>(&m);
+            return e && e->eventName == "ticked";
+        });
+    }, 2000)) << "a native module's event never reached the page";
+
+    pair.second->setReceiver(nullptr);
 }

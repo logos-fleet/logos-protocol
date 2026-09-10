@@ -389,12 +389,26 @@ install(FILES
     DESTINATION include
 )
 
+# incoming_call_handler.h is in this set for the same reason
+# web_transport_connection.h is in the web one: a host outside this repo has to
+# be able to NAME the type. A container that owns a webview serves the page's
+# outbound traffic itself -- it routes a page's call to whatever the core knows
+# how to reach -- and this interface is the shape that dispatch arrives in.
+#
+# qvariant_rpc_value.h comes with it, because a handler cannot be written
+# without it: what arrives is a std::vector<RpcValue> and what the core takes is
+# a QVariantList. That conversion is subtle enough (integer alternatives, byte
+# arrays, the QJsonArray form of a method contract) that a consumer writing its
+# own copy would be writing a second set of the same bugs, which is the reason
+# the file exists here in the first place.
 install(FILES
     implementations/plain/rpc_value.h
     implementations/plain/rpc_message.h
     implementations/plain/wire_codec.h
     implementations/plain/json_codec.h
     implementations/plain/rpc_framing.h
+    implementations/plain/incoming_call_handler.h
+    implementations/plain/qvariant_rpc_value.h
     DESTINATION include/implementations/plain
 )
 
@@ -411,9 +425,14 @@ install(FILES
 # is being dialled -- and a Web module's identity is exactly "which webview",
 # so a host with two of them would attribute frames by luck. A container that
 # already holds the channel for one module constructs the connection over that
-# channel directly instead. The host class stays internal: publishing native
-# objects to a page needs the IncomingCallHandler chain too, and that seam has
-# no consumer yet.
+# channel directly instead.
+#
+# The connection now carries the PAGE -> HOST direction too, so
+# implementations/plain/incoming_call_handler.h is installed alongside it (see
+# the plain set above). WebTransportHost itself stays internal: a container that
+# already owns the channel routes a page's calls through the core's own
+# consumer door, and publishing native ModuleProxy objects onto a page's channel
+# would be a second, competing way to say the same thing.
 install(FILES
     implementations/web/message_channel.h
     implementations/web/in_memory_channel.h

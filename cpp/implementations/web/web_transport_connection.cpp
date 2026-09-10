@@ -15,6 +15,13 @@ WebTransportConnection::WebTransportConnection(MessageChannelPtr channel)
 {
 }
 
+WebTransportConnection::WebTransportConnection(MessageChannelPtr channel,
+                                               logos::plain::IncomingCallHandler* handler)
+    : m_channel(std::move(channel))
+    , m_handler(handler)
+{
+}
+
 WebTransportConnection::~WebTransportConnection()
 {
     if (m_conn) m_conn->stop("connection destroyed");
@@ -33,7 +40,10 @@ bool WebTransportConnection::connectToHost()
         qWarning() << "WebTransportConnection: the message channel is closed";
         return false;
     }
-    auto conn = std::make_shared<WebRpcConnection>(m_channel, nullptr);
+    // The handler, when there is one, is what makes this conversation serve as
+    // well as consume — see the class comment. A null one is the pure consumer
+    // this class was originally.
+    auto conn = std::make_shared<WebRpcConnection>(m_channel, m_handler);
     conn->start();
     m_conn = std::move(conn);
     m_connected = true;

@@ -398,13 +398,27 @@ install(FILES
     DESTINATION include/implementations/plain
 )
 
-# The web transport's injection seam. A host that owns a webview needs these to
-# hand the transport a channel; the connection/host classes themselves are
-# reached through the transport factory and stay internal.
+# The web transport's injection seam, plus the CONSUMER end a webview host has
+# to be able to name.
+#
+# The channel headers are the seam itself: a host that owns a webview hands the
+# transport a channel through them.
+#
+# web_transport_connection.h is here because the process-wide
+# setMessageChannelFactory door cannot serve a host that owns SEVERAL webviews.
+# createConnection() is handed a LogosTransportConfig and calls
+# makeMessageChannel() with no argument, so the factory cannot know WHICH module
+# is being dialled -- and a Web module's identity is exactly "which webview",
+# so a host with two of them would attribute frames by luck. A container that
+# already holds the channel for one module constructs the connection over that
+# channel directly instead. The host class stays internal: publishing native
+# objects to a page needs the IncomingCallHandler chain too, and that seam has
+# no consumer yet.
 install(FILES
     implementations/web/message_channel.h
     implementations/web/in_memory_channel.h
     implementations/web/web_message_codec.h
+    implementations/web/web_transport_connection.h
     DESTINATION include/implementations/web
 )
 

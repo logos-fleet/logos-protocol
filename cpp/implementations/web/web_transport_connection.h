@@ -62,10 +62,10 @@ public:
                         const QString& moduleName) override;
 
 private:
-    MessageChannelPtr                    m_channel;
-    logos::plain::IncomingCallHandler*   m_handler = nullptr;
-    std::shared_ptr<WebRpcConnection>    m_conn;
-    bool                              m_connected = false;
+    MessageChannelPtr                  m_channel;
+    logos::plain::IncomingCallHandler* m_handler = nullptr;
+    std::shared_ptr<WebRpcConnection>  m_conn;
+    bool                               m_connected = false;
 };
 
 } // namespace logos::web

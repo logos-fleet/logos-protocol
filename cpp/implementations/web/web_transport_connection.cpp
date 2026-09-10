@@ -10,8 +10,12 @@
 
 namespace logos::web {
 
+// DELEGATED, so the two entry points cannot drift: "pure consumer" is the
+// handler-taking constructor with no handler, which is exactly what the class
+// comment says it means. Both symbols are still emitted, which is the whole
+// point of there being two constructors rather than one defaulted argument.
 WebTransportConnection::WebTransportConnection(MessageChannelPtr channel)
-    : m_channel(std::move(channel))
+    : WebTransportConnection(std::move(channel), nullptr)
 {
 }
 

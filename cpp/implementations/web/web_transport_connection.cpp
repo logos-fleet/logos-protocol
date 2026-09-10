@@ -10,8 +10,19 @@
 
 namespace logos::web {
 
+// DELEGATED, so the two entry points cannot drift: "pure consumer" is the
+// handler-taking constructor with no handler, which is exactly what the class
+// comment says it means. Both symbols are still emitted, which is the whole
+// point of there being two constructors rather than one defaulted argument.
 WebTransportConnection::WebTransportConnection(MessageChannelPtr channel)
+    : WebTransportConnection(std::move(channel), nullptr)
+{
+}
+
+WebTransportConnection::WebTransportConnection(MessageChannelPtr channel,
+                                               logos::plain::IncomingCallHandler* handler)
     : m_channel(std::move(channel))
+    , m_handler(handler)
 {
 }
 
@@ -33,7 +44,10 @@ bool WebTransportConnection::connectToHost()
         qWarning() << "WebTransportConnection: the message channel is closed";
         return false;
     }
-    auto conn = std::make_shared<WebRpcConnection>(m_channel, nullptr);
+    // The handler, when there is one, is what makes this conversation serve as
+    // well as consume — see the class comment. A null one is the pure consumer
+    // this class was originally.
+    auto conn = std::make_shared<WebRpcConnection>(m_channel, m_handler);
     conn->start();
     m_conn = std::move(conn);
     m_connected = true;

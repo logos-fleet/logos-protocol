@@ -297,9 +297,29 @@
 // so a host that owns several webviews could not name the consumer end of a
 // channel it already holds. Nothing that built against 0.10.0 builds
 // differently, and nothing on the wire moved.
+//
+// 0.10.2 OPENS THE WEB TRANSPORT'S SECOND DIRECTION, and PATCH is again the
+// honest place for it, for the reason 0.10.1 gives: the lp_* C ABI these macros
+// describe is UNCHANGED -- not one function added, removed or re-signed. What
+// moved is packaging plus one additive C++ overload:
+// WebTransportConnection gains a SECOND constructor taking an
+// IncomingCallHandler, so the consumer end of a channel can serve the far end
+// as well as consume it, and incoming_call_handler.h / qvariant_rpc_value.h
+// join the install set because a host outside this repo now has to name those
+// types. The one-argument constructor keeps its symbol and its meaning ("pure
+// consumer"), nothing was removed, and nothing on the wire moved.
+//
+// KEPT INSIDE THE 0.10 LINE DELIBERATELY, and it is worth knowing why rather
+// than discovering it as a build break: logos-plugin-qt's logos_consumer.h
+// carries a `MINOR > 10` bound that refuses to compile against a newer protocol
+// until someone re-reviews CONSUMER ADMISSION (bootstrapKeys,
+// adoptCredential{,For}, credential). This cut touches none of that --
+// token_manager.h and token_manager.cpp are byte-identical across it -- so
+// tripping that bound would ask for a review with nothing in it to review. A
+// cut that DOES move the token store must raise it there in the same wave.
 #define LOGOS_PROTOCOL_VERSION_MINOR 10
-#define LOGOS_PROTOCOL_VERSION_PATCH 1
-#define LOGOS_PROTOCOL_VERSION_STRING "0.10.1"
+#define LOGOS_PROTOCOL_VERSION_PATCH 2
+#define LOGOS_PROTOCOL_VERSION_STRING "0.10.2"
 
 // FEATURE MACRO, because the version macros cannot answer this one. Both 0.9
 // cuts report MINOR 9, so `MINOR >= 9` is true of a protocol that has these

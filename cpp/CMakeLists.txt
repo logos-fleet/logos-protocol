@@ -349,6 +349,14 @@ install(FILES
     logos_codec.h
     logos_call_error.h
     logos_rpc_status.h
+    # The "multi" dispatch wire constants and the sentinel test. Shipped for the
+    # same reason logos_rpc_status.h above it is: an in-band marker is only
+    # useful if BOTH ends spell it the same way, and the ends are in different
+    # repos. logos-plugin-qt's generated glue produces the sentinel and
+    # logos-liblogos' Native container produces it too (its in-process modules
+    # never dispatch on the delivering thread), while this library's own
+    # transports consume it — three images, one definition.
+    logos_async_dispatch.h
     # Windows single-provider marker. token_manager.h / logos_api_client.h /
     # logos_types.h include it, and so does logos-qt-sdk's logos_api.h, so it
     # has to ship even though nothing in this library's own sources needs it.

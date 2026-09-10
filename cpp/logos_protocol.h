@@ -290,9 +290,16 @@
 // name and mis-call it with no diagnostic. The generation counter is maintained
 // for EVERY client, so gap detection reaches a consumer that changes nothing;
 // only the live callback is opt-in.
+//
+// 0.10.1 IS A PACKAGING CUT, NOT A SURFACE ONE, and PATCH is the honest place
+// for it: web_transport_connection.h moved into the install set. The class, its
+// symbols and its wire were already in 0.10.0 -- only the header was missing,
+// so a host that owns several webviews could not name the consumer end of a
+// channel it already holds. Nothing that built against 0.10.0 builds
+// differently, and nothing on the wire moved.
 #define LOGOS_PROTOCOL_VERSION_MINOR 10
-#define LOGOS_PROTOCOL_VERSION_PATCH 0
-#define LOGOS_PROTOCOL_VERSION_STRING "0.10.0"
+#define LOGOS_PROTOCOL_VERSION_PATCH 1
+#define LOGOS_PROTOCOL_VERSION_STRING "0.10.1"
 
 // FEATURE MACRO, because the version macros cannot answer this one. Both 0.9
 // cuts report MINOR 9, so `MINOR >= 9` is true of a protocol that has these

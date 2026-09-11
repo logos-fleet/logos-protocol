@@ -282,6 +282,14 @@ add_executable(protocol_tests
     test_socket_paths.cpp
     # Per-module concurrent dispatch (concurrency:"multi") over the plain transport.
     test_concurrent_dispatch.cpp
+    # The SAME contract over qt_local, which is the transport a consumer gets
+    # for a module published in its own process. It never awaited the pending
+    # sentinel, so an in-process deferring provider — which is every published
+    # Bare module in the Native container — answered the caller with the
+    # sentinel map instead of the result (logos-workspace#53). Detector: all
+    # five cases fail on the pre-fix tree, four with the map leaking through
+    # and the timeout one with a success carrying an empty QVariant.
+    test_local_deferred_dispatch.cpp
     # The token-only handshake surface published before a module's initializer.
     test_handshake_surface.cpp
     test_handshake_surface_transport.cpp

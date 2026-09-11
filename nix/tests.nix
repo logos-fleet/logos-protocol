@@ -44,6 +44,11 @@ pkgs.stdenv.mkDerivation {
     # QCoreApplication" is a property of the process, and protocol_tests' main()
     # constructs one before the first test runs. See tests/protocol/CMakeLists.txt.
     cp build-tests/protocol/protocol_noqt_tests $out/bin/
+    # The wasm subset linked ALONE, natively. Its value is as much in the LINK
+    # as in the cases: nothing but nlohmann_json and gtest is on its line, so a
+    # Qt or Boost include creeping into LOGOS_PROTOCOL_WASM_SOURCES fails here
+    # rather than in the emcc build. See tests/protocol/CMakeLists.txt.
+    cp build-tests/protocol/protocol_wasm_tests $out/bin/
 
     runHook postInstall
   '';

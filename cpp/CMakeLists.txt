@@ -3,6 +3,128 @@ project(LogosProtocol)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── THE WASM SUBSET ─────────────────────────────────────────────────────────
+#
+# logos-protocol on wasm32 is the web transport and nothing else, which is not a
+# reduction chosen for size: a browser has no sockets to give Boost.Asio, no
+# QtRemoteObjects, and no Qt at all under emscripten. What is left is exactly the
+# stack a message channel needs — the wire value model, the JSON mapping, the
+# peer that owns a conversation — plus the web transport that rides it and the
+# lp_* doors a module's generated glue calls.
+#
+# ONE LIST, TWO BUILDS. These files are also compiled into the native
+# `logos_protocol_wasm` archive below, and tests/protocol/protocol_wasm_tests
+# links THAT and nothing else. So "the subset is closed" is checked by a native
+# link in seconds rather than by an emcc build in nix, and a stray `#include
+# <QString>` in one of them fails on every platform instead of only on the one
+# nobody builds locally.
+#
+# WHAT IS DELIBERATELY ABSENT, since each omission is a decision:
+#   * web_transport_host / web_transport_connection — the LogosTransport
+#     implementations. They are the Qt-side seam (QObject, ModuleProxy,
+#     QVariant); a wasm host serves its module directly off WebRpcConnection.
+#   * rpc_connection / rpc_server / io_context_pool — Asio.
+#   * token_manager, module_proxy, logos_api_client — QObject.
+#   * cbor_codec — the web transport is JSON on the wire by definition.
+set(LOGOS_PROTOCOL_WASM_SOURCES
+    implementations/plain/rpc_value.h
+    implementations/plain/rpc_message.h
+    implementations/plain/rpc_message.cpp
+    implementations/plain/wire_codec.h
+    implementations/plain/json_mapping.h
+    implementations/plain/json_mapping.cpp
+    implementations/plain/json_codec.h
+    implementations/plain/json_codec.cpp
+    implementations/plain/rpc_framing.h
+    implementations/plain/rpc_framing.cpp
+    implementations/plain/incoming_call_handler.h
+    implementations/plain/rpc_connection_base.h
+    implementations/plain/rpc_peer.h
+    implementations/plain/rpc_peer.cpp
+    implementations/web/message_channel.h
+    implementations/web/message_channel.cpp
+    implementations/web/in_memory_channel.h
+    implementations/web/in_memory_channel.cpp
+    implementations/web/web_message_codec.h
+    implementations/web/web_message_codec.cpp
+    implementations/web/web_rpc_connection.h
+    implementations/web/web_rpc_connection.cpp
+    # The image's own token store and the lp_* doors over it. TokenManager is a
+    # QObject and logos_protocol.cpp is written over QVariant, so neither
+    # reaches wasm32; see implementations/wasm/wasm_lp_abi.cpp for what is
+    # restated there and why it is not shared.
+    implementations/wasm/wasm_token_store.h
+    implementations/wasm/wasm_token_store.cpp
+    implementations/wasm/wasm_lp_abi.cpp
+)
+
+set(LOGOS_PROTOCOL_WASM_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/wasm
+)
+
+# The headers a wasm HOST outside this repo has to be able to name in order to
+# serve a module: the channel it binds, the connection it starts, and the
+# dispatch interface it implements. Everything else in the subset is reached
+# through those three.
+set(LOGOS_PROTOCOL_WASM_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_protocol.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_module_impl.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_codec.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_shared_api.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_value.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_message.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/wire_codec.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/json_mapping.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/json_codec.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_framing.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/incoming_call_handler.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_connection_base.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_peer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/message_channel.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/in_memory_channel.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/web_message_codec.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/web_rpc_connection.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/wasm/wasm_token_store.h
+)
+
+find_package(nlohmann_json REQUIRED)
+
+add_library(logos_protocol_wasm STATIC ${LOGOS_PROTOCOL_WASM_SOURCES})
+target_link_libraries(logos_protocol_wasm PUBLIC nlohmann_json::nlohmann_json)
+target_include_directories(logos_protocol_wasm PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/web>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/implementations/wasm>
+    $<INSTALL_INTERFACE:include>
+)
+set_target_properties(logos_protocol_wasm PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)
+
+# ── WASM-ONLY CONFIGURATION ─────────────────────────────────────────────────
+#
+# `cmake -DLOGOS_PROTOCOL_WASM_ONLY=ON` stops here. It has to STOP rather than
+# guard each Qt use: under the Emscripten toolchain `find_package(Qt6)` does not
+# fail late with a missing component, it fails at the first line, and AUTOMOC is
+# an error before that. Everything below this point is the desktop library.
+#
+# The install is flat and carries no CMake package config. A wasm consumer is
+# emcc driven by the module builder, not find_package() — and a Config file
+# naming Qt6/Boost/OpenSSL as find_dependency() would be a lie in an image that
+# has none of them.
+option(LOGOS_PROTOCOL_WASM_ONLY
+       "Build ONLY the wasm subset (web transport, no Qt/Boost/OpenSSL)" OFF)
+if(LOGOS_PROTOCOL_WASM_ONLY)
+    install(TARGETS logos_protocol_wasm ARCHIVE DESTINATION lib)
+    install(FILES ${LOGOS_PROTOCOL_WASM_HEADERS} DESTINATION include)
+    return()
+endif()
+
 set(CMAKE_AUTOMOC ON)
 
 # Find Qt packages — Qt is an implementation detail of the qt_remote (QRO)
@@ -29,7 +151,6 @@ else()
 endif()
 message(STATUS "Boost.System target: ${LOGOS_BOOST_SYSTEM} (Boost ${Boost_VERSION})")
 find_package(OpenSSL REQUIRED)
-find_package(nlohmann_json REQUIRED)
 
 set(PROTOCOL_SOURCES
     logos_protocol.h

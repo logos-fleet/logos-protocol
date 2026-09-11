@@ -7,9 +7,14 @@
   outputs = { self, nixpkgs, logos-nix }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
+      # logos-nix's overlays, not a bare `import nixpkgs`. `packages` has always
+      # had them (forAllTargets applies them); `checks` did not, so the wasm
+      # check could not see the Emscripten pin -- which is an attribute the
+      # overlay adds. Naming lib.nativeOverlays rather than the individual
+      # entries is what logos-nix's own drift guard asks consumers to do.
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
         inherit system;
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs { inherit system; overlays = logos-nix.lib.nativeOverlays; };
       });
 
       # Adds the "x86_64-windows" pseudo-system. A cross derivation's `system`
@@ -30,6 +35,12 @@
           # The module-impl C ABI as data, for the language backends to check
           # themselves against. See nix/module-impl-abi.nix.
           module-impl-abi = import ./nix/module-impl-abi.nix { inherit pkgs common src; };
+
+          # logos-protocol for wasm32: the web transport as the only transport,
+          # no Qt, no Boost, no OpenSSL. Reached from a native package set --
+          # emscripten is a toolchain, not a nixpkgs cross target. See
+          # nix/wasm.nix.
+          wasm = import ./nix/wasm.nix { inherit pkgs common src; };
 
           # The qt-host/protocol pairing rule, for consumers to run against
           # their own closure. See nix/abi-closure-check.nix.
@@ -55,6 +66,15 @@
           logos-protocol = protocol;
           default = protocol;
         }
+        # WASM IS NATIVE-ONLY here, and the guard is why. forAllTargets also
+        # yields the "x86_64-windows" pseudo-system, whose cross package set
+        # never sees logos-nix's native overlays and therefore has no
+        # logosEmscriptenSetup -- naming it there is an EVAL failure for the
+        # whole attribute set, not a missing package. There is nothing to lose:
+        # a wasm artifact does not depend on which machine emitted it.
+        // nixpkgs.lib.optionalAttrs (pkgs ? logosEmscriptenSetup) {
+          logos-protocol-wasm = wasm;
+        }
       );
 
       checks = forAllSystems ({ pkgs, ... }:
@@ -78,6 +98,13 @@
           abi-closure-check-tests = import ./nix/tests-abi-closure-check.nix {
             inherit pkgs common src abi-closure-check;
           };
+
+          # The wasm subset, built by emcc and gated on the shipped bytes (no
+          # Qt/Boost/OpenSSL symbol, every object a wasm object, every lp_* door
+          # the generated module glue calls actually defined). Its NATIVE twin
+          # -- the same source list linked alone -- is a case inside `tests`
+          # above; this one is the artifact.
+          wasm = import ./nix/wasm.nix { inherit pkgs common src; };
         }
       );
 

@@ -144,6 +144,10 @@ std::vector<RpcValue> argsFromJson(const json& j)
 
 // ── Public entry points ────────────────────────────────────────────────────
 
+json rpcValueToJson(const RpcValue& v) { return valueToJson(v); }
+
+RpcValue jsonToRpcValue(const json& j) { return jsonToValue(j); }
+
 json messageToJson(const AnyMessage& msg)
 {
     return std::visit([](const auto& m) -> json {

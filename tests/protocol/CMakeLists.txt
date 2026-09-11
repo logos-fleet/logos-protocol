@@ -486,3 +486,33 @@ target_link_libraries(protocol_noqt_tests PRIVATE
 )
 
 gtest_discover_tests(protocol_noqt_tests)
+
+# ── the wasm subset, linked NATIVELY and ALONE ───────────────────────────────
+#
+# A third executable, and the reason is the LINK LINE rather than the tests.
+# `logos_protocol_wasm` is the exact source list emcc compiles for a Wasm host
+# (cpp/CMakeLists.txt, LOGOS_PROTOCOL_WASM_SOURCES); linking it here with
+# nothing but GTest and nlohmann_json is what proves the subset is closed. Add a
+# Qt include to one of those files and this target fails to build on every
+# platform, in seconds — instead of the emcc build in nix/wasm.nix being the
+# first thing to notice, minutes later and only where emscripten is installed.
+#
+# It must NOT link `logos_protocol`: both archives define lp_token_save and
+# friends (the Qt image over TokenManager, the wasm one over WasmTokenStore) and
+# a link that pulled in both would resolve to whichever came first — silently
+# testing the wrong implementation.
+add_executable(protocol_wasm_tests
+    test_main_noqt.cpp
+    test_wasm_token_store.cpp
+)
+
+target_include_directories(protocol_wasm_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(protocol_wasm_tests PRIVATE
+    logos_protocol_wasm
+    GTest::gtest
+)
+
+gtest_discover_tests(protocol_wasm_tests)

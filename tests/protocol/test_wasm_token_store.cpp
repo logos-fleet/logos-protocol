@@ -28,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <string>
 
 namespace {
@@ -125,9 +126,11 @@ TEST_F(WasmTokenStoreTest, TokenKeysListsTheOutboundHalfWithTheGrant)
 
     const nlohmann::json keys = nlohmann::json::parse(takeString(lp_token_keys()));
     ASSERT_TRUE(keys.is_array());
-    // waku_module is in there BECAUSE of the carve-out below, not because
-    // lp_token_keys reads the inbound half — chat_module is the control.
     EXPECT_NE(keys.end(), std::find(keys.begin(), keys.end(), "chat_module"));
+    // ...and waku_module is NOT, which is the half that has teeth: it was
+    // written through the inbound door while no grant was in force, so the
+    // carve-out below never ran for it and lp_token_keys must not reach it.
+    EXPECT_EQ(keys.end(), std::find(keys.begin(), keys.end(), "waku_module"));
 }
 
 // THE TOKEN-REGISTRY CARVE-OUT, carried over verbatim in meaning from

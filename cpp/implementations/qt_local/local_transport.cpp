@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -63,9 +64,25 @@ struct CompletionLedger {
     QHash<QString, QVariant> values;
     QHash<QString, QEventLoop*> syncWaiters;
     QHash<QString, LogosObjectErrorChannel::AsyncResultErrorCallback> asyncWaiters;
+
+    // The completion for `id` if it has already landed, consuming it.
+    //
+    // std::optional AND NOT A BARE QVariant, because an invalid QVariant is a
+    // legitimate completion value — a provider's `void` method answers one —
+    // so "invalid" cannot double as "not here yet".
+    std::optional<QVariant> takeLanded(const QString& id)
+    {
+        const auto it = values.find(id);
+        if (it == values.end()) return std::nullopt;
+        QVariant landed = std::move(*it);
+        values.erase(it);
+        return landed;
+    }
 };
 
-using LedgerPtr = std::shared_ptr<CompletionLedger>;
+// A caller that passes no deadline still gets one. 30s matches the bound
+// RemoteLogosObject applies to the same wait.
+constexpr int kDefaultDeferredBudgetMs = 30000;
 
 } // anonymous namespace
 
@@ -181,8 +198,8 @@ public:
                 // The completion can already have landed: the provider's worker
                 // runs while this lambda does, and ModuleProxy queues the
                 // emission onto this very thread.
-                if (ledger->values.contains(callId)) {
-                    callback(ledger->values.take(callId), logos::CallError{});
+                if (auto landed = ledger->takeLanded(callId)) {
+                    callback(*landed, logos::CallError{});
                     return;
                 }
                 ledger->asyncWaiters.insert(callId, callback);
@@ -191,9 +208,10 @@ public:
                 const int budget = deferredBudget(timeoutMs);
                 QTimer::singleShot(budget, helper,
                     [ledger, callId, origin, method = methodName.toStdString(), budget]() {
-                        if (!ledger->asyncWaiters.contains(callId)) return;
-                        auto cb = ledger->asyncWaiters.take(callId);
-                        if (cb)
+                        // take() is also the exactly-once gate: whichever of
+                        // the deadline and the completion sink reaches the
+                        // waiter first leaves nothing for the other.
+                        if (auto cb = ledger->asyncWaiters.take(callId))
                             cb(QVariant(), logos::callErrorTimeout(origin, method, budget));
                     });
             });
@@ -234,7 +252,7 @@ public:
         // Every waiter's channel just went away. The sync ones are woken so
         // they report a timeout rather than parking for their whole budget; the
         // async ones go with the helper their delivery was contexted on.
-        for (QEventLoop* loop : m_ledger->syncWaiters)
+        for (QEventLoop* loop : std::as_const(m_ledger->syncWaiters))
             if (loop) loop->quit();
         m_ledger->asyncWaiters.clear();
     }
@@ -271,9 +289,10 @@ private:
             origin, "module '" + origin + "' is no longer registered locally");
     }
 
-    // A caller that passes no deadline still gets one. 30s matches the bound
-    // RemoteLogosObject applies to the same wait.
-    static int deferredBudget(int timeoutMs) { return timeoutMs > 0 ? timeoutMs : 30000; }
+    static int deferredBudget(int timeoutMs)
+    {
+        return timeoutMs > 0 ? timeoutMs : kDefaultDeferredBudgetMs;
+    }
 
     // Bring the event channel up and install the completion sink on it. Both
     // halves in one place because a helper without the sink is exactly the bug
@@ -291,18 +310,18 @@ private:
                          m_helper, SLOT(onEventResponse(QString,QVariantList)));
         qDebug() << "[LogosObject] LocalLogosObject: connected EventHelper to ModuleProxy signals";
 
+        // A local copy, because the sink must not capture `this`: it outlives
+        // the handle by however long the last posted lambda takes to run.
         EventHelper* helper = m_helper;
         m_helper->addCallback(logos::callCompleteEvent(),
             [helper, ledger = m_ledger](const QString&, const QVariantList& data) {
                 if (data.size() != 2) return;
                 const QString id = data.at(0).toString();
                 const QVariant result = data.at(1);
-                ledger->values.insert(id, result);
-                if (QEventLoop* loop = ledger->syncWaiters.value(id, nullptr))
-                    loop->quit();                          // wake a sync waiter
-                if (ledger->asyncWaiters.contains(id)) {   // fire an async one
-                    auto cb = ledger->asyncWaiters.take(id);
-                    ledger->values.remove(id);
+
+                // At most ONE waiter kind per id: a call id names a single
+                // call, and that call is either the sync arm or the async one.
+                if (auto cb = ledger->asyncWaiters.take(id)) {
                     // NEXT event-loop turn, never inline. The user callback
                     // (LogosAPIConsumer's async lambda -> the module's own
                     // completion handler) routinely emits an event and then
@@ -310,10 +329,16 @@ private:
                     // helper's slot re-enters the object Qt is still
                     // dispatching through. The helper is the context, so the
                     // delivery is dropped if the channel is torn down first.
-                    if (cb)
-                        QTimer::singleShot(0, helper,
-                            [cb = std::move(cb), result]() { cb(result, logos::CallError{}); });
+                    QTimer::singleShot(0, helper,
+                        [cb = std::move(cb), result]() { cb(result, logos::CallError{}); });
+                    return;
                 }
+
+                // Otherwise bank it: either a sync waiter is parked on this id,
+                // or its caller has not reached its wait yet.
+                ledger->values.insert(id, result);
+                if (QEventLoop* loop = ledger->syncWaiters.value(id, nullptr))
+                    loop->quit();
             });
     }
 
@@ -333,7 +358,7 @@ private:
         if (!logos::isPendingCallSentinel(rv, &callId)) return rv;
         // It can already be here: the provider's worker runs concurrently with
         // the dispatch that returned the sentinel.
-        if (m_ledger->values.contains(callId)) return m_ledger->values.take(callId);
+        if (auto landed = m_ledger->takeLanded(callId)) return *landed;
 
         const int budget = deferredBudget(timeoutMs);
         QEventLoop loop;
@@ -345,7 +370,7 @@ private:
         loop.exec();
         m_ledger->syncWaiters.remove(callId);
 
-        if (m_ledger->values.contains(callId)) return m_ledger->values.take(callId);
+        if (auto landed = m_ledger->takeLanded(callId)) return *landed;
         qWarning() << "LocalLogosObject: deferred call" << callId << "timed out";
         if (err)
             *err = logos::callErrorTimeout(m_objectName.toStdString(),
@@ -362,7 +387,7 @@ private:
     // disconnectEvents() can name the sender without dereferencing a corpse.
     QPointer<ModuleProxy> m_proxy;
     EventHelper* m_helper;
-    LedgerPtr m_ledger = std::make_shared<CompletionLedger>();
+    std::shared_ptr<CompletionLedger> m_ledger = std::make_shared<CompletionLedger>();
     QString m_objectName;
 };
 

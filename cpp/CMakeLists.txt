@@ -75,6 +75,10 @@ set(LOGOS_PROTOCOL_WASM_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_module_impl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_codec.h
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_shared_api.h
+    # Named by logos-cpp-sdk's logos_lp_client.h, which every generated
+    # logos_sdk.cpp includes -- so it ships even though nothing in the wasm
+    # source list includes it itself.
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_call_error.h
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_value.h
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/rpc_message.h
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/plain/wire_codec.h

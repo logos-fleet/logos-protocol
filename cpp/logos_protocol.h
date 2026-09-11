@@ -317,9 +317,31 @@
 // token_manager.h and token_manager.cpp are byte-identical across it -- so
 // tripping that bound would ask for a review with nothing in it to review. A
 // cut that DOES move the token store must raise it there in the same wave.
+// 0.10.3 MAKES qt_local KEEP A PROMISE THE OTHER TWO TRANSPORTS ALREADY KEPT,
+// and PATCH is the honest place for it because nothing here is new: the pending
+// sentinel, the completion event and the "the consumer transport waits for it"
+// rule have all been in logos_async_dispatch.h since 0.2. LocalLogosObject
+// simply never implemented that half, and returned the sentinel MAP to its
+// caller as the answer.
+//
+// It was invisible while every deferring provider was a `multi` Qt plugin,
+// which a consumer reaches over qt_remote. The Native container ended that: a
+// Bundled Bare module is published in its consumer's own process, so the handle
+// is a LocalLogosObject, and BareModuleGlue defers every published dispatch by
+// construction. Measured on the iOS simulator (logos-workspace#53): `add(1, 2)`
+// answered empty with CallError::ok() true, and __logos_call_complete__ arrived
+// after the caller had given up.
+//
+// No lp_* function added, removed or re-signed; no wire change; no header moved
+// in or out of the install set. A caller that was already getting real values
+// (every non-deferring provider) sees the identical code path, because a result
+// that is not the sentinel is returned unchanged. KEPT INSIDE THE 0.10 LINE for
+// the reason 0.10.2 gives: logos-plugin-qt's logos_consumer.h refuses to
+// compile against MINOR > 10 until consumer admission is re-reviewed, and
+// token_manager.{h,cpp} are untouched here.
 #define LOGOS_PROTOCOL_VERSION_MINOR 10
-#define LOGOS_PROTOCOL_VERSION_PATCH 2
-#define LOGOS_PROTOCOL_VERSION_STRING "0.10.2"
+#define LOGOS_PROTOCOL_VERSION_PATCH 3
+#define LOGOS_PROTOCOL_VERSION_STRING "0.10.3"
 
 // FEATURE MACRO, because the version macros cannot answer this one. Both 0.9
 // cuts report MINOR 9, so `MINOR >= 9` is true of a protocol that has these

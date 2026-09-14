@@ -918,6 +918,31 @@ QVariant PlainLogosObject::callMethodWithError(const QString& authToken,
                                                int timeoutMs,
                                                logos::CallError* err)
 {
+    // No caller document: this entry point is an ordinary consumer's own call,
+    // and the caller of THAT call is nobody's business here. See
+    // callMethodForCaller for the one shape that supplies one.
+    return callSyncForCaller(std::string{}, authToken, methodName, args, timeoutMs, err);
+}
+
+QVariant PlainLogosObject::callMethodForCaller(const std::string& callerJson,
+                                               const QString& authToken,
+                                               const QString& methodName,
+                                               const QVariantList& args,
+                                               int timeoutMs)
+{
+    // The error is discarded exactly as LogosObject::callMethod discards it: a
+    // relay hands its caller a QVariant, and a handle that also implements
+    // LogosObjectErrorChannel is still reachable for the diagnosis.
+    return callSyncForCaller(callerJson, authToken, methodName, args, timeoutMs, nullptr);
+}
+
+QVariant PlainLogosObject::callSyncForCaller(const std::string& callerJson,
+                                             const QString& authToken,
+                                             const QString& methodName,
+                                             const QVariantList& args,
+                                             int timeoutMs,
+                                             logos::CallError* err)
+{
     EntryGuard guard(this, "callMethodWithError()");
     if (err) err->clear();
     if (!m_conn || !m_conn->isOpen()) {
@@ -944,6 +969,10 @@ QVariant PlainLogosObject::callMethodWithError(const QString& authToken,
     msg.object    = m_objectName;
     msg.method    = methodName.toStdString();
     msg.args      = qvariantListToRpcList(args);
+    // Empty unless a relay named one, and an empty one is omitted from the
+    // encoding entirely (json_mapping.cpp) — so nothing about the frame an
+    // ordinary consumer puts on the wire changes.
+    msg.caller    = callerJson;
 
     const std::uint64_t callNumber = msg.id;
     auto fut = m_conn->sendCall(std::move(msg));
@@ -1122,6 +1151,33 @@ void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
                                                 int timeoutMs,
                                                 AsyncResultErrorCallback callback)
 {
+    // No caller document — see callMethodWithError for why an ordinary
+    // consumer's own outbound call must not carry one.
+    callAsyncForCaller(std::string{}, authToken, methodName, args, timeoutMs,
+                       std::move(callback));
+}
+
+void PlainLogosObject::callMethodAsyncForCaller(const std::string& callerJson,
+                                                const QString& authToken,
+                                                const QString& methodName,
+                                                const QVariantList& args,
+                                                int timeoutMs,
+                                                AsyncResultCallback callback)
+{
+    if (!callback) return;
+    callAsyncForCaller(callerJson, authToken, methodName, args, timeoutMs,
+        [cb = std::move(callback)](QVariant v, const logos::CallError&) mutable {
+            cb(std::move(v));
+        });
+}
+
+void PlainLogosObject::callAsyncForCaller(const std::string& callerJson,
+                                          const QString& authToken,
+                                          const QString& methodName,
+                                          const QVariantList& args,
+                                          int timeoutMs,
+                                          AsyncResultErrorCallback callback)
+{
     EntryGuard guard(this, "callMethodAsyncWithError()");
     if (!callback) return;
     if (!m_conn || !m_conn->isOpen()) {
@@ -1142,6 +1198,8 @@ void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
     msg.object    = m_objectName;
     msg.method    = methodName.toStdString();
     msg.args      = qvariantListToRpcList(args);
+    // Empty unless a relay named one; an empty one never reaches the wire.
+    msg.caller    = callerJson;
 
     // Copied, not read from the object later: everything below this line may
     // outlive the handle.

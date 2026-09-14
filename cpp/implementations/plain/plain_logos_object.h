@@ -30,7 +30,9 @@ struct AsyncCall;
 // Owns a shared_ptr<RpcConnectionBase>; the transport layer hands the
 // connection over after opening the socket. release() stops the connection.
 // -----------------------------------------------------------------------------
-class PlainLogosObject : public LogosObject, public LogosObjectErrorChannel {
+class PlainLogosObject : public LogosObject,
+                         public LogosObjectErrorChannel,
+                         public LogosObjectCallerChannel {
 public:
     PlainLogosObject(std::string objectName,
                      std::shared_ptr<RpcConnectionBase> conn);
@@ -61,6 +63,23 @@ public:
                                   const QVariantList& args,
                                   int timeoutMs,
                                   AsyncResultErrorCallback callback) override;
+
+    // LogosObjectCallerChannel — the relay door. Everything about the call is
+    // the same as callMethod's; the only difference is that CallMessage::caller
+    // carries `callerJson` instead of being absent. See the interface for who
+    // may use it and why it is not picked up from an ambient thread-local.
+    QVariant callMethodForCaller(const std::string& callerJson,
+                                 const QString& authToken,
+                                 const QString& methodName,
+                                 const QVariantList& args,
+                                 int timeoutMs) override;
+
+    void callMethodAsyncForCaller(const std::string& callerJson,
+                                  const QString& authToken,
+                                  const QString& methodName,
+                                  const QVariantList& args,
+                                  int timeoutMs,
+                                  AsyncResultCallback callback) override;
 
     bool informModuleToken(const QString& authToken,
                            const QString& moduleName,
@@ -200,6 +219,28 @@ public:
     };
 
 private:
+    // THE ONE SYNCHRONOUS CALL PATH. The three public sync entry points —
+    // callMethod, callMethodWithError and callMethodForCaller — are adapters
+    // over this, each discarding what it does not carry. One body means one
+    // EntryGuard, one SyncCallScope and one deferred-completion rendezvous, so
+    // the doors cannot drift apart the way two copies of this would.
+    QVariant callSyncForCaller(const std::string& callerJson,
+                               const QString& authToken,
+                               const QString& methodName,
+                               const QVariantList& args,
+                               int timeoutMs,
+                               logos::CallError* err);
+
+    // ...and the one ASYNCHRONOUS call path, for the same reason: callMethodAsync,
+    // callMethodAsyncWithError and callMethodAsyncForCaller are all adapters
+    // over this.
+    void callAsyncForCaller(const std::string& callerJson,
+                            const QString& authToken,
+                            const QString& methodName,
+                            const QVariantList& args,
+                            int timeoutMs,
+                            AsyncResultErrorCallback callback);
+
     // Deferred ("multi") completion rendezvous. A multi provider returns a
     // pending sentinel (logos::pendingCallKey) from callMethod and later pushes
     // the real result as a logos::callCompleteEvent event keyed by callId. We

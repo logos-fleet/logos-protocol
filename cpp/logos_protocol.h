@@ -339,9 +339,44 @@
 // the reason 0.10.2 gives: logos-plugin-qt's logos_consumer.h refuses to
 // compile against MINOR > 10 until consumer admission is re-reviewed, and
 // token_manager.{h,cpp} are untouched here.
+//
+// 0.10.4 LETS A RELAY NAME THE CALLER IT IS RELAYING FOR, and PATCH is the
+// honest place for it because nothing existing moves: not one lp_* function
+// added, removed or re-signed, and no frame a consumer emits today changes by a
+// byte.
+//
+// WHAT IT FIXES. The Web container publishes a page as an ordinary provider and
+// forwards every inbound dispatch to it presenting THAT MODULE'S OWN root
+// credential — the only credential it holds. So a page asked "who is calling
+// me" has nothing but a token filed under its own name, and the derivation that
+// looks right answers the page ITSELF for every caller in the fleet. Measured
+// on a device: keystore_module.caller_identity(), asked by wallet_ui, answered
+// `module "keystore_module"`, and every name-gated method on that module then
+// refused everybody (logos-workspace#129). It is not keystore-specific — any
+// `web` module that gates on a caller's name gates on its own.
+//
+// WHAT MOVED, exhaustively:
+//   * CallMessage gains `caller`, a logos-protocol caller document. EMPTY is
+//     the default and means NOT SUPPLIED — distinct from {"kind":"unknown"},
+//     which asserts that the caller could not be named — and an empty one is
+//     OMITTED from the encoding, so an unchanged consumer emits the identical
+//     frame and an unchanged receiver reads the identical fields.
+//   * logos_object.h gains LogosObjectCallerChannel, a SIBLING interface
+//     reached by dynamic_cast, for the reason LogosObjectErrorChannel gives:
+//     LogosObject's vtable is frozen. LogosObject itself is byte-for-byte
+//     unchanged in layout, size and vtable.
+//   * PlainLogosObject implements it. Its three sync doors now share one body.
+//
+// KEPT INSIDE THE 0.10 LINE for the reason 0.10.2 gives: logos-plugin-qt's
+// logos_consumer.h refuses to compile against MINOR > 10 until CONSUMER
+// ADMISSION is re-reviewed, and this cut touches none of it — token_manager.{h,
+// cpp} are byte-identical across it, no bootstrap key moves, and nothing here
+// authorizes anything. `caller` sits BESIDE the auth token and is read only
+// after it has been checked; what licenses a receiver to believe it is the
+// channel it arrived on (ADR 0005), not the document itself.
 #define LOGOS_PROTOCOL_VERSION_MINOR 10
-#define LOGOS_PROTOCOL_VERSION_PATCH 3
-#define LOGOS_PROTOCOL_VERSION_STRING "0.10.3"
+#define LOGOS_PROTOCOL_VERSION_PATCH 4
+#define LOGOS_PROTOCOL_VERSION_STRING "0.10.4"
 
 // FEATURE MACRO, because the version macros cannot answer this one. Both 0.9
 // cuts report MINOR 9, so `MINOR >= 9` is true of a protocol that has these

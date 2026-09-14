@@ -41,12 +41,34 @@ struct MethodMetadata {
 };
 
 // Call <module>.<method>(args...). The response is a Result with the same id.
+//
+// `caller` is the logos-protocol CALLER DOCUMENT of the dispatch this call is
+// being relayed out of — the same JSON object logos_module_set_call_caller()
+// takes, whose normative shape is in logos_module_impl.h. It exists because a
+// RELAY cannot be identified by its token: a Web module's container presents
+// that module's own root credential on every call it forwards, so a page
+// deriving the caller from the token it was handed answers with ITS OWN NAME
+// for every caller in the fleet (logos-workspace#129).
+//
+// EMPTY IS "NOT SUPPLIED", and it is the default. It is not
+// `{"kind":"unknown"}`: a peer that fills this field and a peer that has never
+// heard of it are different facts, and only the first one is an assertion about
+// who is calling. An empty `caller` is omitted from the encoding entirely, so
+// a frame from a consumer that never sets it is byte-identical to what it sent
+// before the field existed and a receiver keeps whatever fallback it had.
+//
+// IT IS NOT A CREDENTIAL. Nothing about this document authorizes anything —
+// `authToken` still does that, and it is still checked first. What licenses a
+// receiver to believe the document is the CHANNEL it arrived on (ADR 0005): a
+// web module's channel is written by its container and by nothing else, so a
+// document on it is the container's statement, not a peer's claim.
 struct CallMessage {
     uint64_t              id;
     std::string           authToken;
     std::string           object;
     std::string           method;
     std::vector<RpcValue> args;
+    std::string           caller;
 };
 
 // Response to a Call (or Methods) message, matched by id.

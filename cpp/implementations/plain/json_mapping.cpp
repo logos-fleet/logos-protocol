@@ -159,6 +159,12 @@ json messageToJson(const AnyMessage& msg)
             o["object"] = m.object;
             o["method"] = m.method;
             o["args"] = argsToJson(m.args);
+            // OMITTED WHEN EMPTY, which is the whole compatibility story: a
+            // consumer that never sets it emits the frame it always emitted,
+            // and a receiver that has never heard of the key is unaffected
+            // either way (every decoder here reads named keys and ignores the
+            // rest). See CallMessage in rpc_message.h for what the value means.
+            if (!m.caller.empty()) o["caller"] = m.caller;
         } else if constexpr (std::is_same_v<T, ResultMessage>) {
             o["id"] = m.id;
             o["ok"] = m.ok;
@@ -211,6 +217,7 @@ AnyMessage jsonToMessage(MessageType tag, const json& j)
         m.authToken = j.value("authToken", std::string{});
         m.object    = j.value("object", std::string{});
         m.method    = j.value("method", std::string{});
+        m.caller    = j.value("caller", std::string{});
         if (j.contains("args")) m.args = argsFromJson(j["args"]);
         return m;
     }

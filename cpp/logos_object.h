@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <functional>
 #include <cstdint>
+#include <string>
 
 /**
  * @brief Abstract interface for a module object handle.
@@ -285,6 +286,86 @@ public:
                                           const QVariantList& args,
                                           int timeoutMs,
                                           AsyncResultErrorCallback callback) = 0;
+};
+
+
+/**
+ * @brief Optional extension: a call made ON BEHALF OF a named caller.
+ *
+ * A RELAY IS NOT IDENTIFIABLE BY ITS TOKEN, and that is the whole reason this
+ * exists. The Web container publishes a page as an ordinary provider and
+ * forwards every inbound dispatch to it over the web transport, presenting THAT
+ * MODULE'S OWN root credential — the only credential it has. A page therefore
+ * derives "who is calling me" from a token that says nothing about the caller,
+ * and the honest-looking derivation (the name the token was filed under)
+ * answers the page ITS OWN NAME for every caller in the fleet. Measured on a
+ * device: `keystore_module.caller_identity()`, asked by `wallet_ui`, answered
+ * `module "keystore_module"` (logos-workspace#129).
+ *
+ * So the identity travels as DATA, beside the token rather than inside it:
+ * `callerJson` is the logos-protocol caller document (logos_module_impl.h has
+ * the normative shape) of the dispatch the relay is forwarding, and it lands in
+ * CallMessage::caller.
+ *
+ * WHO MAY USE IT: a relay that is inside a dispatch and is forwarding THAT
+ * dispatch. Not an ordinary consumer making its own outbound call — there the
+ * caller is the consumer itself, and passing on whoever called IT would be a
+ * confused deputy. Which is exactly why this is an explicit argument rather
+ * than something the transport picks up from an ambient thread-local: the two
+ * cases are indistinguishable from inside the transport and only the call site
+ * knows which one it is.
+ *
+ * A SIBLING INTERFACE, NOT A VIRTUAL ON LogosObject, for the reason spelled out
+ * on LogosObjectErrorChannel above: LogosObject's vtable is baked into every
+ * statically-linked copy of liblogos_protocol in the process, so appending a
+ * slot is undefined behaviour across a version boundary. Consumers MUST treat
+ * it as optional:
+ *
+ *     if (auto* c = dynamic_cast<LogosObjectCallerChannel*>(obj))
+ *         c->callMethodForCaller(caller, tok, m, a, ms);
+ *     else
+ *         obj->callMethod(tok, m, a, ms);   // today's behaviour, unchanged
+ *
+ * Implemented by the plain transport's handle (PlainLogosObject), which is what
+ * the tcp, tcp_ssl AND web transports all hand back. Not implemented by the
+ * QtRO, qt_local or mock handles: a native module reached over those already
+ * gets its caller pushed across the module-impl C ABI by the generated glue,
+ * which is the mechanism this one stands in for where there is no such glue.
+ */
+class LogosObjectCallerChannel {
+public:
+    virtual ~LogosObjectCallerChannel() = default;
+
+    /**
+     * @brief callMethod, naming the caller this call is relayed on behalf of.
+     * @param callerJson The caller document. EMPTY means "not supplied" and is
+     *        exactly callMethod — it is NOT `{"kind":"unknown"}`, which is an
+     *        assertion that the caller could not be named.
+     */
+    virtual QVariant callMethodForCaller(const std::string& callerJson,
+                                         const QString& authToken,
+                                         const QString& methodName,
+                                         const QVariantList& args,
+                                         int timeoutMs) = 0;
+
+    /**
+     * @brief callMethodAsync, naming the caller this call is relayed for.
+     *
+     * BOTH DOORS, because a relay uses both: the Web container's relay blocks
+     * with a PUMPING wait on the Qt main thread — which is an ASYNC call plus a
+     * nested event loop, since a plain blocking one there deadlocks against the
+     * page's own callbacks — and an ordinary blocking call everywhere else. A
+     * sync-only extension would have fixed the identity on exactly the thread
+     * no host actually relays from.
+     *
+     * Same delivery contract as LogosObject::callMethodAsync, in full.
+     */
+    virtual void callMethodAsyncForCaller(const std::string& callerJson,
+                                          const QString& authToken,
+                                          const QString& methodName,
+                                          const QVariantList& args,
+                                          int timeoutMs,
+                                          LogosObject::AsyncResultCallback callback) = 0;
 };
 
 #endif // LOGOS_OBJECT_H

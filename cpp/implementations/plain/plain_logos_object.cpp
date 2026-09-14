@@ -75,6 +75,18 @@ logos::CallError callErrorReleased(const std::string& objectName,
         "was released while the call was in flight");
 }
 
+// The adapter the two error-free async doors share. Both callMethodAsync and
+// callMethodAsyncForCaller reach the single async path, which always carries a
+// diagnosis; both have always thrown it away, and a consumer that wants the
+// CallError asks for it by name through callMethodAsyncWithError.
+LogosObjectErrorChannel::AsyncResultErrorCallback discardingError(
+    LogosObject::AsyncResultCallback cb)
+{
+    return [cb = std::move(cb)](QVariant v, const logos::CallError&) mutable {
+        cb(std::move(v));
+    };
+}
+
 // -----------------------------------------------------------------------------
 // DeadlineService — the clock the per-call deadlines hang off. ONE thread for
 // the whole process, and deliberately NOT the one the connections run on.
@@ -918,6 +930,35 @@ QVariant PlainLogosObject::callMethodWithError(const QString& authToken,
                                                int timeoutMs,
                                                logos::CallError* err)
 {
+    // No caller document: this entry point is an ordinary consumer's own call,
+    // and the caller of THAT call is nobody's business here. See
+    // callMethodForCaller for the one shape that supplies one.
+    return callSync(std::string{}, authToken, methodName, args, timeoutMs, err);
+}
+
+QVariant PlainLogosObject::callMethodForCaller(const std::string& callerJson,
+                                               const QString& authToken,
+                                               const QString& methodName,
+                                               const QVariantList& args,
+                                               int timeoutMs)
+{
+    // The error is discarded exactly as LogosObject::callMethod discards it: a
+    // relay hands its caller a QVariant, and a handle that also implements
+    // LogosObjectErrorChannel is still reachable for the diagnosis.
+    return callSync(callerJson, authToken, methodName, args, timeoutMs, nullptr);
+}
+
+QVariant PlainLogosObject::callSync(const std::string& callerJson,
+                                    const QString& authToken,
+                                    const QString& methodName,
+                                    const QVariantList& args,
+                                    int timeoutMs,
+                                    logos::CallError* err)
+{
+    // The label names the canonical door rather than the one actually entered:
+    // it is a diagnostic string, all three sync doors funnel here, and reporting
+    // a race in "callMethodWithError()" has been its wording since callMethod
+    // became an adapter.
     EntryGuard guard(this, "callMethodWithError()");
     if (err) err->clear();
     if (!m_conn || !m_conn->isOpen()) {
@@ -944,6 +985,10 @@ QVariant PlainLogosObject::callMethodWithError(const QString& authToken,
     msg.object    = m_objectName;
     msg.method    = methodName.toStdString();
     msg.args      = qvariantListToRpcList(args);
+    // Empty unless a relay named one, and an empty one is omitted from the
+    // encoding entirely (json_mapping.cpp) — so nothing about the frame an
+    // ordinary consumer puts on the wire changes.
+    msg.caller    = callerJson;
 
     const std::uint64_t callNumber = msg.id;
     auto fut = m_conn->sendCall(std::move(msg));
@@ -1111,9 +1156,7 @@ void PlainLogosObject::callMethodAsync(const QString& authToken,
     // which is exactly what this entry point has always done.
     if (!callback) return;
     callMethodAsyncWithError(authToken, methodName, args, timeoutMs,
-        [cb = std::move(callback)](QVariant v, const logos::CallError&) mutable {
-            cb(std::move(v));
-        });
+                             discardingError(std::move(callback)));
 }
 
 void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
@@ -1122,6 +1165,35 @@ void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
                                                 int timeoutMs,
                                                 AsyncResultErrorCallback callback)
 {
+    // No caller document — see callMethodWithError for why an ordinary
+    // consumer's own outbound call must not carry one.
+    callAsync(std::string{}, authToken, methodName, args, timeoutMs,
+              std::move(callback));
+}
+
+void PlainLogosObject::callMethodAsyncForCaller(const std::string& callerJson,
+                                                const QString& authToken,
+                                                const QString& methodName,
+                                                const QVariantList& args,
+                                                int timeoutMs,
+                                                AsyncResultCallback callback)
+{
+    // Same adapter callMethodAsync uses: a relay is handed a QVariant, and a
+    // handle that also implements LogosObjectErrorChannel remains reachable for
+    // the diagnosis.
+    if (!callback) return;
+    callAsync(callerJson, authToken, methodName, args, timeoutMs,
+              discardingError(std::move(callback)));
+}
+
+void PlainLogosObject::callAsync(const std::string& callerJson,
+                                 const QString& authToken,
+                                 const QString& methodName,
+                                 const QVariantList& args,
+                                 int timeoutMs,
+                                 AsyncResultErrorCallback callback)
+{
+    // The canonical door, for the reason callSync gives.
     EntryGuard guard(this, "callMethodAsyncWithError()");
     if (!callback) return;
     if (!m_conn || !m_conn->isOpen()) {
@@ -1142,6 +1214,8 @@ void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
     msg.object    = m_objectName;
     msg.method    = methodName.toStdString();
     msg.args      = qvariantListToRpcList(args);
+    // Empty unless a relay named one; an empty one never reaches the wire.
+    msg.caller    = callerJson;
 
     // Copied, not read from the object later: everything below this line may
     // outlive the handle.

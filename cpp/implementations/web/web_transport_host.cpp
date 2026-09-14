@@ -185,6 +185,12 @@ void WebTransportHost::onCall(const CallMessage& req, CallReply reply)
         return;
     }
 
+    // req.caller is IGNORED HERE, deliberately. This is the direction a PAGE
+    // calls the host in, and a page naming its own caller is an assertion, not
+    // a fact: identity on this wire is the channel the message arrived on (ADR
+    // 0005), and ModuleProxy resolves it from the token below. The field is
+    // only ever filled in the other direction, by the container relaying a
+    // dispatch it already authorized — see CallMessage in rpc_message.h.
     const QString      authToken  = QString::fromStdString(req.authToken);
     const QString      methodName = QString::fromStdString(req.method);
     const QVariantList args       = logos::plain::rpcListToQVariantList(req.args);

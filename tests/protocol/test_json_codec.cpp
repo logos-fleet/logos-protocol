@@ -37,6 +37,49 @@ TEST(JsonCodecTest, CallMessage)
     EXPECT_EQ(dec.args[2].asBool(), true);
 }
 
+// THE CALLER DOCUMENT SURVIVES THE WIRE, and is ABSENT when nobody set one.
+//
+// A relay is not identifiable by its token: the Web container presents the
+// relayed module's OWN root credential on every call it forwards, so a page
+// that derives the caller from that token names itself for every caller in the
+// fleet (logos-workspace#129). `caller` is how the relay says who it is
+// relaying for, and the two halves below are both load-bearing — the value has
+// to arrive intact, and a consumer that sets nothing has to emit exactly the
+// frame it emitted before the field existed.
+TEST(JsonCodecTest, CallMessageCarriesTheCallerDocument)
+{
+    JsonCodec codec;
+    CallMessage c;
+    c.id = 8;
+    c.authToken = "tok";
+    c.object = "keystore_module";
+    c.method = "create_unrelated_account";
+    c.caller = R"({"kind":"module","name":"wallet_ui"})";
+
+    auto dec = std::get<CallMessage>(roundtrip(codec, AnyMessage{c}));
+    EXPECT_EQ(dec.caller, R"({"kind":"module","name":"wallet_ui"})");
+}
+
+TEST(JsonCodecTest, ACallWithNoCallerDoesNotCarryTheKeyAtAll)
+{
+    JsonCodec codec;
+    CallMessage c;
+    c.id = 9;
+    c.authToken = "tok";
+    c.object = "js_counter";
+    c.method = "add";
+
+    // Not merely "decodes to empty": the KEY must be missing, because that is
+    // what makes the frame identical to a pre-#129 one on a wire a foreign
+    // implementation may be strict about.
+    const auto bytes = codec.encode(AnyMessage{c});
+    const std::string text(bytes.begin(), bytes.end());
+    EXPECT_EQ(text.find("caller"), std::string::npos) << text;
+
+    auto dec = std::get<CallMessage>(roundtrip(codec, AnyMessage{c}));
+    EXPECT_TRUE(dec.caller.empty());
+}
+
 TEST(JsonCodecTest, ResultOk)
 {
     JsonCodec codec;

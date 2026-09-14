@@ -224,22 +224,22 @@ private:
     // over this, each discarding what it does not carry. One body means one
     // EntryGuard, one SyncCallScope and one deferred-completion rendezvous, so
     // the doors cannot drift apart the way two copies of this would.
-    QVariant callSyncForCaller(const std::string& callerJson,
-                               const QString& authToken,
-                               const QString& methodName,
-                               const QVariantList& args,
-                               int timeoutMs,
-                               logos::CallError* err);
+    QVariant callSync(const std::string& callerJson,
+                      const QString& authToken,
+                      const QString& methodName,
+                      const QVariantList& args,
+                      int timeoutMs,
+                      logos::CallError* err);
 
     // ...and the one ASYNCHRONOUS call path, for the same reason: callMethodAsync,
     // callMethodAsyncWithError and callMethodAsyncForCaller are all adapters
     // over this.
-    void callAsyncForCaller(const std::string& callerJson,
-                            const QString& authToken,
-                            const QString& methodName,
-                            const QVariantList& args,
-                            int timeoutMs,
-                            AsyncResultErrorCallback callback);
+    void callAsync(const std::string& callerJson,
+                   const QString& authToken,
+                   const QString& methodName,
+                   const QVariantList& args,
+                   int timeoutMs,
+                   AsyncResultErrorCallback callback);
 
     // Deferred ("multi") completion rendezvous. A multi provider returns a
     // pending sentinel (logos::pendingCallKey) from callMethod and later pushes

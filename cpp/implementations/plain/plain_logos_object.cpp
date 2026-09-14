@@ -75,6 +75,18 @@ logos::CallError callErrorReleased(const std::string& objectName,
         "was released while the call was in flight");
 }
 
+// The adapter the two error-free async doors share. Both callMethodAsync and
+// callMethodAsyncForCaller reach the single async path, which always carries a
+// diagnosis; both have always thrown it away, and a consumer that wants the
+// CallError asks for it by name through callMethodAsyncWithError.
+LogosObjectErrorChannel::AsyncResultErrorCallback discardingError(
+    LogosObject::AsyncResultCallback cb)
+{
+    return [cb = std::move(cb)](QVariant v, const logos::CallError&) mutable {
+        cb(std::move(v));
+    };
+}
+
 // -----------------------------------------------------------------------------
 // DeadlineService — the clock the per-call deadlines hang off. ONE thread for
 // the whole process, and deliberately NOT the one the connections run on.
@@ -921,7 +933,7 @@ QVariant PlainLogosObject::callMethodWithError(const QString& authToken,
     // No caller document: this entry point is an ordinary consumer's own call,
     // and the caller of THAT call is nobody's business here. See
     // callMethodForCaller for the one shape that supplies one.
-    return callSyncForCaller(std::string{}, authToken, methodName, args, timeoutMs, err);
+    return callSync(std::string{}, authToken, methodName, args, timeoutMs, err);
 }
 
 QVariant PlainLogosObject::callMethodForCaller(const std::string& callerJson,
@@ -933,16 +945,20 @@ QVariant PlainLogosObject::callMethodForCaller(const std::string& callerJson,
     // The error is discarded exactly as LogosObject::callMethod discards it: a
     // relay hands its caller a QVariant, and a handle that also implements
     // LogosObjectErrorChannel is still reachable for the diagnosis.
-    return callSyncForCaller(callerJson, authToken, methodName, args, timeoutMs, nullptr);
+    return callSync(callerJson, authToken, methodName, args, timeoutMs, nullptr);
 }
 
-QVariant PlainLogosObject::callSyncForCaller(const std::string& callerJson,
-                                             const QString& authToken,
-                                             const QString& methodName,
-                                             const QVariantList& args,
-                                             int timeoutMs,
-                                             logos::CallError* err)
+QVariant PlainLogosObject::callSync(const std::string& callerJson,
+                                    const QString& authToken,
+                                    const QString& methodName,
+                                    const QVariantList& args,
+                                    int timeoutMs,
+                                    logos::CallError* err)
 {
+    // The label names the canonical door rather than the one actually entered:
+    // it is a diagnostic string, all three sync doors funnel here, and reporting
+    // a race in "callMethodWithError()" has been its wording since callMethod
+    // became an adapter.
     EntryGuard guard(this, "callMethodWithError()");
     if (err) err->clear();
     if (!m_conn || !m_conn->isOpen()) {
@@ -1140,9 +1156,7 @@ void PlainLogosObject::callMethodAsync(const QString& authToken,
     // which is exactly what this entry point has always done.
     if (!callback) return;
     callMethodAsyncWithError(authToken, methodName, args, timeoutMs,
-        [cb = std::move(callback)](QVariant v, const logos::CallError&) mutable {
-            cb(std::move(v));
-        });
+                             discardingError(std::move(callback)));
 }
 
 void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
@@ -1153,8 +1167,8 @@ void PlainLogosObject::callMethodAsyncWithError(const QString& authToken,
 {
     // No caller document — see callMethodWithError for why an ordinary
     // consumer's own outbound call must not carry one.
-    callAsyncForCaller(std::string{}, authToken, methodName, args, timeoutMs,
-                       std::move(callback));
+    callAsync(std::string{}, authToken, methodName, args, timeoutMs,
+              std::move(callback));
 }
 
 void PlainLogosObject::callMethodAsyncForCaller(const std::string& callerJson,
@@ -1164,20 +1178,22 @@ void PlainLogosObject::callMethodAsyncForCaller(const std::string& callerJson,
                                                 int timeoutMs,
                                                 AsyncResultCallback callback)
 {
+    // Same adapter callMethodAsync uses: a relay is handed a QVariant, and a
+    // handle that also implements LogosObjectErrorChannel remains reachable for
+    // the diagnosis.
     if (!callback) return;
-    callAsyncForCaller(callerJson, authToken, methodName, args, timeoutMs,
-        [cb = std::move(callback)](QVariant v, const logos::CallError&) mutable {
-            cb(std::move(v));
-        });
+    callAsync(callerJson, authToken, methodName, args, timeoutMs,
+              discardingError(std::move(callback)));
 }
 
-void PlainLogosObject::callAsyncForCaller(const std::string& callerJson,
-                                          const QString& authToken,
-                                          const QString& methodName,
-                                          const QVariantList& args,
-                                          int timeoutMs,
-                                          AsyncResultErrorCallback callback)
+void PlainLogosObject::callAsync(const std::string& callerJson,
+                                 const QString& authToken,
+                                 const QString& methodName,
+                                 const QVariantList& args,
+                                 int timeoutMs,
+                                 AsyncResultErrorCallback callback)
 {
+    // The canonical door, for the reason callSync gives.
     EntryGuard guard(this, "callMethodAsyncWithError()");
     if (!callback) return;
     if (!m_conn || !m_conn->isOpen()) {

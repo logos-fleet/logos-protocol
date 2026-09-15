@@ -43,14 +43,18 @@ let
 
   # The symbols the claim is about, named once and checked below.
   outboundDoorSymbols = [ "lp_client_create" "lp_invoke" ];
+
+  # The claim as the installCheck's shell sees it, so the check compares against
+  # the same word it prints.
+  doorClaim = pkgs.lib.boolToString hasOutboundDoor;
 in
 
 pkgs.stdenv.mkDerivation {
   pname = "${common.pname}-wasm";
+  version = common.version;
 
   # Read at EVAL time by logos-module-builder's `web` gate.
   passthru = { inherit hasOutboundDoor; };
-  version = common.version;
 
   inherit src;
 
@@ -175,8 +179,8 @@ pkgs.stdenv.mkDerivation {
     # that the flag above is the other half of the change.
     for sym in ${pkgs.lib.concatStringsSep " " outboundDoorSymbols}; do
       if grep -Eq "[TDW] $sym\$" syms.txt; then defined=true; else defined=false; fi
-      if [ "$defined" != "${pkgs.lib.boolToString hasOutboundDoor}" ]; then
-        echo "logos-protocol wasm: hasOutboundDoor is ${pkgs.lib.boolToString hasOutboundDoor}," \
+      if [ "$defined" != "${doorClaim}" ]; then
+        echo "logos-protocol wasm: hasOutboundDoor is ${doorClaim}," \
              "but $sym is defined=$defined in the archive."
         echo "  The flag is read at EVAL time by logos-module-builder's \`web\` gate"
         echo "  (ADR 0009): a module with dependencies gets a \`web\` output only when"
@@ -187,7 +191,7 @@ pkgs.stdenv.mkDerivation {
     done
 
     echo "logos-protocol wasm subset: $(wc -l < syms.txt) symbols," \
-         "outbound door ${pkgs.lib.boolToString hasOutboundDoor}, gate OK"
+         "outbound door ${doorClaim}, gate OK"
     runHook postInstallCheck
   '';
 

@@ -18,8 +18,38 @@
 # install in cpp/CMakeLists.txt.
 { pkgs, common, src }:
 
+let
+  # ── THE OUTBOUND DOOR, as a fact a CONSUMER can read before building ───────
+  #
+  # A wasm image serves calls; it cannot yet MAKE one. `lp_client_create` and
+  # `lp_invoke` live in logos_protocol.cpp, which is not in
+  # LOGOS_PROTOCOL_WASM_SOURCES (cpp/CMakeLists.txt) — so a module that calls a
+  # dependency links against nothing and wasm-ld reports an undefined symbol
+  # forty lines into an emcc command, naming neither the module nor the reason.
+  #
+  # logos-module-builder has to know that BEFORE it decides whether a module
+  # with dependencies gets a `web` output at all (ADR 0009, gate 2), and "before"
+  # means at EVAL time, off the package, without realising it. Hence a passthru
+  # boolean rather than anything read out of the archive.
+  #
+  # It is `false` for as long as the subset has no client side. The day that
+  # lands, this flips to `true` and every consumer's gate opens with no edit in
+  # any module's flake — which is the whole point of keying the temporary half of
+  # ADR 0009 on the PIN rather than on the module.
+  #
+  # A consumer reads it as `pkg.hasOutboundDoor or false`: a pin that predates
+  # this attribute is a pin without the door, which is exactly what it means.
+  hasOutboundDoor = false;
+
+  # The symbols the claim is about, named once and checked below.
+  outboundDoorSymbols = [ "lp_client_create" "lp_invoke" ];
+in
+
 pkgs.stdenv.mkDerivation {
   pname = "${common.pname}-wasm";
+
+  # Read at EVAL time by logos-module-builder's `web` gate.
+  passthru = { inherit hasOutboundDoor; };
   version = common.version;
 
   inherit src;
@@ -134,7 +164,30 @@ pkgs.stdenv.mkDerivation {
         || { echo "$sym is not defined in the wasm archive"; exit 1; }
     done
 
-    echo "logos-protocol wasm subset: $(wc -l < syms.txt) symbols, gate OK"
+    # ── ...and the outbound-door claim is not allowed to go stale ───────────
+    #
+    # `hasOutboundDoor` is a hand-written boolean read at EVAL time, so nothing
+    # forces it to describe these bytes. Both directions are asserted here:
+    # claiming a door the archive does not define would open a consumer's gate
+    # onto a link failure, and NOT claiming one it does define would keep every
+    # dependent module's `web` output switched off after the door landed, with
+    # no diagnostic anywhere. Whoever adds the client side is told, by name,
+    # that the flag above is the other half of the change.
+    for sym in ${pkgs.lib.concatStringsSep " " outboundDoorSymbols}; do
+      if grep -Eq "[TDW] $sym\$" syms.txt; then defined=true; else defined=false; fi
+      if [ "$defined" != "${pkgs.lib.boolToString hasOutboundDoor}" ]; then
+        echo "logos-protocol wasm: hasOutboundDoor is ${pkgs.lib.boolToString hasOutboundDoor}," \
+             "but $sym is defined=$defined in the archive."
+        echo "  The flag is read at EVAL time by logos-module-builder's \`web\` gate"
+        echo "  (ADR 0009): a module with dependencies gets a \`web\` output only when"
+        echo "  the pinned protocol can make an outbound call. Flip"
+        echo "  hasOutboundDoor in nix/wasm.nix to match these bytes."
+        exit 1
+      fi
+    done
+
+    echo "logos-protocol wasm subset: $(wc -l < syms.txt) symbols," \
+         "outbound door ${pkgs.lib.boolToString hasOutboundDoor}, gate OK"
     runHook postInstallCheck
   '';
 

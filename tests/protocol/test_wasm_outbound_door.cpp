@@ -38,8 +38,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -78,7 +78,6 @@ public:
             std::lock_guard<std::mutex> g(m_mu);
             m_seen.push_back(s);
         }
-        m_cv.notify_all();
 
         ResultMessage res;
         res.id = req.id;
@@ -118,7 +117,6 @@ public:
 
 private:
     mutable std::mutex m_mu;
-    std::condition_variable m_cv;
     std::vector<Seen> m_seen;
     std::string m_mintedToken;          // "" == capability_module refuses
     nlohmann::json m_answer = 42;
@@ -126,8 +124,13 @@ private:
 };
 
 // One lp_invoke_async outcome, captured from the C callback.
+//
+// `fired` is the publication flag and it is ATOMIC because it crosses a thread:
+// the callback lands on the channel's delivery thread and waitFor() polls it
+// from the test thread. Written LAST, so a reader that sees it also sees the
+// outcome it announces.
 struct Outcome {
-    bool fired = false;
+    std::atomic<bool> fired{false};
     int ok = -1;
     std::string json;
 };
@@ -135,18 +138,18 @@ struct Outcome {
 void captureCb(int ok, const char* json, void* user_data)
 {
     auto* out = static_cast<Outcome*>(user_data);
-    out->fired = true;
     out->ok = ok;
     out->json = json ? json : "";
+    out->fired.store(true);
 }
 
 // The callback lands on the channel's delivery thread, so a test waits for it.
 bool waitFor(const Outcome& out, int ms = 2000)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-    while (!out.fired && std::chrono::steady_clock::now() < deadline)
+    while (!out.fired.load() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    return out.fired;
+    return out.fired.load();
 }
 
 class WasmOutboundDoorTest : public ::testing::Test {

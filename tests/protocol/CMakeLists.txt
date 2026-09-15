@@ -512,6 +512,7 @@ gtest_discover_tests(protocol_noqt_tests)
 add_executable(protocol_wasm_tests
     test_main_noqt.cpp
     test_wasm_token_store.cpp
+    test_wasm_outbound_door.cpp
 )
 
 target_include_directories(protocol_wasm_tests PRIVATE

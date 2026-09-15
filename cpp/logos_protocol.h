@@ -560,6 +560,26 @@ LP_API void lp_client_destroy(lp_client* client);
  * a failed call at this level; that matches existing behavior).
  * On failure: *out_error_json (if non-NULL) receives the canonical error
  * object. Both out-strings are owned by the caller (lp_string_free).
+ *
+ * NOT DEFINED ON wasm32, AND THAT IS THE ANSWER RATHER THAN AN OMISSION.
+ *
+ * The wasm subset (implementations/wasm/wasm_lp_abi.cpp) implements
+ * lp_client_create, lp_client_destroy and lp_invoke_async and deliberately
+ * leaves THIS symbol undefined. A wasm image runs in a Web Worker: one event
+ * loop, no threads, and no ASYNCIFY (ADR 0004 — it roughly doubles the image
+ * and slows every dispatch). A call that blocked waiting for its reply would
+ * deadlock the loop that was going to deliver it, so there is no
+ * implementation to give — the target forbids the shape.
+ *
+ * The alternative considered and rejected was an always-error stub. It links,
+ * which means a module that calls a synchronous dependency wrapper ships and
+ * fails on a phone. Undefined, wasm-ld stops the build and names the symbol,
+ * which is where an author can still change the spelling. The language SDKs
+ * push the same diagnosis one step earlier where they can: logos-rust-sdk
+ * compiles no synchronous call path under `cfg(target_os = "emscripten")` and
+ * lidl-gen emits each generated sync method under the same gate, so a
+ * `codegen.rust` module fails to COMPILE, naming the method, and is told to
+ * call its `_async` twin.
  */
 LP_API int lp_invoke(lp_client* client,
               const char* method,
@@ -595,6 +615,20 @@ LP_API int lp_invoke(lp_client* client,
  *
  * Argument/handle validation still fails synchronously with
  * LP_ERR_INVALID_ARG and `cb` is NOT called in that case.
+ *
+ * ON wasm32 THIS IS THE ONLY CONSUMER ENTRY POINT (see lp_invoke above), and
+ * two of its promises are weaker there, stated so a caller does not rely on
+ * them:
+ *
+ *   * `cb` may fire INLINE, before this function returns, for an outcome the
+ *     door decides without the wire (no host channel, or a target this image
+ *     holds no credential for). There is no event loop of its own to post to —
+ *     the image has one, and it belongs to the host.
+ *   * `timeout_ms` is accepted and NOT enforced. The subset has no timer, and
+ *     what answers every pending call in practice is the container, which
+ *     replies on all of its paths. The uncovered case is the one
+ *     implementations/web/web_rpc_connection.h already records: a channel that
+ *     CLOSES does not fail its peer's pending calls.
  */
 LP_API int lp_invoke_async(lp_client* client,
                     const char* method,

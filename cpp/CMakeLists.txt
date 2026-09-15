@@ -56,6 +56,7 @@ set(LOGOS_PROTOCOL_WASM_SOURCES
     # restated there and why it is not shared.
     implementations/wasm/wasm_token_store.h
     implementations/wasm/wasm_token_store.cpp
+    implementations/wasm/wasm_outbound_door.h
     implementations/wasm/wasm_lp_abi.cpp
 )
 
@@ -93,6 +94,9 @@ set(LOGOS_PROTOCOL_WASM_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/web_message_codec.h
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/web/web_rpc_connection.h
     ${CMAKE_CURRENT_SOURCE_DIR}/implementations/wasm/wasm_token_store.h
+    # The host's one seam with the outbound door: it installs the connection
+    # lp_invoke_async sends on. Named by logos-module-builder's wasm host.
+    ${CMAKE_CURRENT_SOURCE_DIR}/implementations/wasm/wasm_outbound_door.h
 )
 
 find_package(nlohmann_json REQUIRED)

@@ -9,12 +9,22 @@
 // wasm32.
 //
 // So this file is what a wasm image links instead: the same C ABI, the same
-// return codes, the same refusals, over WasmTokenStore. It is deliberately NOT
-// the whole of logos_protocol.h — a wasm module that tried to lp_client_create()
-// would fail to LINK, naming the symbol, which is the honest answer for an image
-// with no transport it could dial. When a Wasm module gains outbound calls they
-// arrive over the web transport the host already speaks, through a new door,
-// not by growing this file into a second copy of logos_protocol.cpp.
+// return codes, the same refusals, over WasmTokenStore.
+//
+// AND, SINCE THE OUTBOUND DOOR, the consumer stack too — lp_client_create,
+// lp_client_destroy and lp_invoke_async, over the web transport the host
+// already speaks (wasm_outbound_door.h) rather than by growing this file into a
+// second copy of logos_protocol.cpp. There is no LogosAPI in here, no
+// TokenManager and no QtRO replica: a client is a target name, an origin name
+// and a lifetime, and the call is a CallMessage on the image's one channel.
+//
+// lp_invoke — the SYNCHRONOUS twin — IS STILL UNDEFINED, ON PURPOSE. See the
+// block above lp_invoke_async for the whole argument; the short form is that a
+// Worker is one event loop, this image is built without ASYNCIFY (ADR 0004),
+// and a call that blocked for its reply would deadlock the loop that delivers
+// it. Defining it as an always-error stub would let such a module link and fail
+// on a phone; leaving it undefined makes it fail to BUILD, naming the symbol,
+// which is where an author can still do something about it.
 //
 // WHAT IS DUPLICATED HERE AND WHY THAT IS RIGHT: the direction rule, the
 // reserved-key refusal and the token-registry carve-out are restated rather
@@ -25,14 +35,23 @@
 // semantics owes an edit here and a case there.
 
 #include "logos_protocol.h"
+#include "wasm_outbound_door.h"
 #include "wasm_token_store.h"
+
+#include "json_mapping.h"
+#include "logos_call_error.h"
+#include "rpc_message.h"
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -166,3 +185,288 @@ int lp_grant_host_services(const char* services_json)
 }
 
 } // extern "C"
+
+namespace {
+// ── the outbound door's state ───────────────────────────────────────────────
+//
+// One connection per image, installed by the host. Held WEAKLY: the host owns
+// it (it owns the channel underneath), and a client that outlives the host's
+// teardown must fail rather than keep a dead conversation alive.
+std::mutex g_outboundMutex;
+std::weak_ptr<logos::plain::RpcConnectionBase> g_outbound;
+
+std::shared_ptr<logos::plain::RpcConnectionBase> outboundConnection()
+{
+    std::lock_guard<std::mutex> lock(g_outboundMutex);
+    return g_outbound.lock();
+}
+
+// The module every outbound token comes from. Named once: it is the ONE target
+// the door may dial without already holding a credential for it, and that
+// exception is the bootstrap.
+constexpr const char* kCapabilityModule = "capability_module";
+
+// The canonical {code, message, origin} error object, byte-identical in shape
+// to makeErrorJson in logos_protocol.cpp — lp_result_cb's contract is the same
+// on both sides of the wall, so a Rust or C++ consumer decodes one shape.
+std::string errorJson(const logos::CallError& err)
+{
+    nlohmann::json e;
+    e["code"] = err.code;
+    e["message"] = err.message;
+    e["origin"] = err.origin;
+    return e.dump();
+}
+
+// A client's liveness cell. lp_client_destroy promises that no further callback
+// fires, and the wire cannot be un-sent: the pending handler stays registered
+// on the connection and simply drops its answer. Same shape, same reason, as
+// CbGuard on the Qt side.
+using AliveCell = std::shared_ptr<std::atomic<bool>>;
+
+} // namespace
+
+// The handle the C ABI hands out. Defined here rather than in the header for
+// the same reason the Qt image defines its own: `lp_client` is an opaque tag to
+// everyone outside the implementation that vends it.
+struct lp_client {
+    std::string target;
+    std::string origin;
+    AliveCell   alive = std::make_shared<std::atomic<bool>>(true);
+};
+
+namespace {
+
+// Put one Call on the wire and route its Result to `cb`, exactly once.
+void sendOutboundCall(const std::shared_ptr<logos::plain::RpcConnectionBase>& conn,
+                      const AliveCell& alive,
+                      const std::string& target, const std::string& method,
+                      const std::string& authToken,
+                      std::vector<logos::plain::RpcValue> args,
+                      lp_result_cb cb, void* userData)
+{
+    logos::plain::CallMessage call;
+    call.id = conn->nextId();
+    call.object = target;
+    call.method = method;
+    call.args = std::move(args);
+    // THE CREDENTIAL, AND NOTHING ELSE THIS IMAGE COULD ASSERT. A wasm image
+    // mints nothing and holds no other module's secrets (ADR 0005); what it
+    // presents is the token the core or capability_module granted it for THIS
+    // target, read out of its own store — the same store lp_token_get reads and
+    // the same one TokenManager is on a desktop host.
+    call.authToken = authToken;
+
+    conn->sendCallAsync(std::move(call), [alive, cb, userData, target](
+                                             logos::plain::ResultMessage res) {
+        // A destroyed client answers nothing. The handler cannot be withdrawn
+        // from the peer (cancelPending is by id and the id is gone with the
+        // call), so the drop happens here.
+        if (!alive || !alive->load()) return;
+        if (!res.ok) {
+            const logos::CallError err =
+                logos::callErrorFromWire(target, res.errCode, res.err);
+            const std::string json = errorJson(err);
+            cb(0, json.c_str(), userData);
+            return;
+        }
+        const std::string json = logos::plain::rpcValueToJson(res.value).dump();
+        cb(1, json.c_str(), userData);
+    });
+}
+
+} // namespace
+
+extern "C" {
+
+/* ------------------------------------------------- consumer: the outbound door
+ *
+ * WHY THERE IS NO lp_invoke HERE, stated where a reader looking for it will be.
+ *
+ * A Worker is ONE event loop. A reply to an outbound call arrives as a message
+ * on it, and this image is built without ASYNCIFY (ADR 0004 — it roughly
+ * doubles the image and slows every dispatch), so a call that blocked waiting
+ * for its reply would deadlock the very loop that was going to deliver it. The
+ * synchronous spelling is not missing; the target forbids it. logos-module-
+ * builder's logos_web_module_call.h states the identical rule for the `ui_qml`
+ * twin of this door, and the reasoning does not change with the language.
+ *
+ * SO IT IS ABSENT RATHER THAN STUBBED, and that was the decision to make. A
+ * stub that always returned LP_ERR_UNAVAILABLE would let a module calling the
+ * sync twin LINK and then fail on a phone, at the one moment nobody can act on
+ * it. Undefined, wasm-ld names the symbol and the build stops. The generated
+ * Rust client makes that diagnosis better still: logos-rust-sdk compiles no
+ * synchronous path on emscripten at all (`cfg(not(target_os = "emscripten"))`),
+ * and lidl-gen emits each sync method under the same gate, so a `codegen.rust`
+ * module that calls `dep.add(1, 2)` for `web` fails to COMPILE naming `add` and
+ * is told to call `add_async`. A C++ universal module hears it one step later,
+ * from the linker, naming lp_invoke.
+ */
+
+lp_client* lp_client_create(const char* target_module,
+                            const char* origin_module,
+                            const char* /*target_transport_json*/,
+                            const char* /*capability_transport_json*/)
+{
+    if (!target_module || !*target_module) return nullptr;
+
+    // THE TRANSPORT ARGUMENTS ARE IGNORED, and they have to be. The frozen
+    // signature lets a desktop caller pick a wire; a wasm image HAS one wire,
+    // the channel its host bound, and there is no second one it could be asked
+    // for. Accepted and dropped rather than refused, so the same generated
+    // consumer code compiles for both targets — it passes NULL in practice
+    // (see logos-rust-sdk's shared_client and logos-cpp-sdk's LpClient::ensure).
+    auto* client = new lp_client;
+    client->target = target_module;
+    client->origin = origin_module ? origin_module : "";
+    return client;
+}
+
+void lp_client_destroy(lp_client* client)
+{
+    if (!client) return;
+    // Announce the death BEFORE freeing: a reply already in flight reads this
+    // cell (it holds its own share of it) and drops itself.
+    client->alive->store(false);
+    delete client;
+}
+
+int lp_invoke_async(lp_client* client,
+                    const char* method,
+                    const char* args_json,
+                    int /*timeout_ms*/,
+                    lp_result_cb cb,
+                    void* user_data)
+{
+    if (!client || !method || !*method || !cb) return LP_ERR_INVALID_ARG;
+
+    std::vector<logos::plain::RpcValue> args;
+    if (args_json && *args_json) {
+        const nlohmann::json parsed =
+            nlohmann::json::parse(args_json, nullptr, /*allow_exceptions=*/false);
+        if (parsed.is_discarded() || !parsed.is_array()) return LP_ERR_INVALID_ARG;
+        for (const nlohmann::json& a : parsed)
+            args.push_back(logos::plain::jsonToRpcValue(a));
+    }
+
+    // THE DEADLINE IS NOT ENFORCED HERE, and that is recorded rather than
+    // papered over. This subset has no timer: emscripten's would make the
+    // shipping build differ from the one the tests link (they are the same
+    // source list, natively compiled — tests/protocol/CMakeLists.txt), and a
+    // thread is the one thing a Worker does not have. What answers every
+    // pending call today is the container, which replies on all of its paths
+    // (WebCallRouter::onCall). The uncovered case is the one web_rpc_connection.h
+    // already records for this transport: a channel that CLOSES does not fail
+    // its peer's pending calls. Closing that belongs with the host that owns
+    // the webview's lifecycle, and it closes both gaps at once.
+    const std::string target = client->target;
+    const std::string origin = client->origin;
+    const AliveCell alive = client->alive;
+
+    // FAILURES BELOW ARE DELIVERED THROUGH `cb`, INLINE, before this returns —
+    // and a LP_OK is still the right return, because the call WAS dispatched as
+    // far as this door is concerned and the outcome is the callback's to carry
+    // (lp_invoke_async's contract: "a LP_OK return means dispatched, never
+    // succeeded"). Inline rather than posted because there is nothing to post
+    // to: see the deadline note above. Every consumer in the tree tolerates it —
+    // logos-rust-sdk's call_json_async_inner does nothing after the ABI call
+    // returns, and logos-cpp-sdk's invokeAsync likewise.
+    const auto refuse = [cb, user_data](const logos::CallError& err) {
+        const std::string json = errorJson(err);
+        cb(0, json.c_str(), user_data);
+        return LP_OK;
+    };
+
+    std::shared_ptr<logos::plain::RpcConnectionBase> conn = outboundConnection();
+    if (!conn || !conn->isOpen()) {
+        return refuse(logos::callErrorTransport(
+            target, "this wasm image has no host channel: its host installed no "
+                    "connection, or the one it installed is closed"));
+    }
+
+    const std::string held = WasmTokenStore::instance().outbound(target);
+    if (!held.empty() || target == kCapabilityModule) {
+        // capability_module is dialled WITHOUT a credential when this image
+        // holds none, and it is the only name that may be. It is where a
+        // credential comes from; refusing the bootstrap would refuse everything
+        // downstream of it. It is also safe to do so: the target authorizes on
+        // its own side and names the caller from the dispatch, not from the
+        // token (capability_module_impl.cpp's requestModule).
+        sendOutboundCall(conn, alive, target, method, held, std::move(args),
+                         cb, user_data);
+        return LP_OK;
+    }
+
+    // ── no credential for this target: ask for one, do not call without it ──
+    //
+    // The same handshake a native client runs transparently on its first call
+    // (logos_api_client.cpp's requestModule flow), spelled out here because a
+    // wasm image has no LogosAPI to run it. ONE DIFFERENCE, deliberate: the
+    // native client forwards the call tokenless when the handshake yields
+    // nothing, and this one refuses. A relay that forwarded a call it was not
+    // granted is a hole that ends at whatever the far side happens to check,
+    // and on this wire the far side is a container whose job is to relay.
+    const std::string capabilityToken =
+        WasmTokenStore::instance().outbound(kCapabilityModule);
+
+    logos::plain::CallMessage req;
+    req.id = conn->nextId();
+    req.object = kCapabilityModule;
+    req.method = "requestModule";
+    req.authToken = capabilityToken;
+    // `fromModuleName` is leftover ABI — capability_module ignores it and takes
+    // the caller from the dispatch — but it is sent honestly anyway, because a
+    // log line naming the wrong module is a debugging cost paid much later.
+    req.args.push_back(logos::plain::RpcValue(origin));
+    req.args.push_back(logos::plain::RpcValue(target));
+
+    auto pending = std::make_shared<std::vector<logos::plain::RpcValue>>(std::move(args));
+    const std::string methodName = method;
+
+    conn->sendCallAsync(std::move(req), [conn, alive, target, methodName, pending,
+                                         cb, user_data](
+                                            logos::plain::ResultMessage res) {
+        if (!alive || !alive->load()) return;
+
+        std::string minted;
+        if (res.ok) {
+            const nlohmann::json v = logos::plain::rpcValueToJson(res.value);
+            if (v.is_string()) minted = v.get<std::string>();
+        }
+        if (minted.empty()) {
+            const std::string json = errorJson(logos::CallError{
+                "unauthorized",
+                "capability_module granted this image no token for '" + target
+                    + "', so the call was not forwarded",
+                target });
+            cb(0, json.c_str(), user_data);
+            return;
+        }
+
+        // ONCE PER TARGET, not once per call: the grant goes into the image's
+        // own store, which is what the fast path above reads.
+        WasmTokenStore::instance().saveOutbound(target, minted);
+        sendOutboundCall(conn, alive, target, methodName, minted,
+                         std::move(*pending), cb, user_data);
+    });
+
+    return LP_OK;
+}
+
+} // extern "C"
+
+namespace logos::wasm {
+
+void setOutboundConnection(const std::shared_ptr<logos::plain::RpcConnectionBase>& connection)
+{
+    std::lock_guard<std::mutex> lock(g_outboundMutex);
+    g_outbound = connection;
+}
+
+bool outboundDoorIsOpen()
+{
+    const std::shared_ptr<logos::plain::RpcConnectionBase> conn = outboundConnection();
+    return conn && conn->isOpen();
+}
+
+} // namespace logos::wasm

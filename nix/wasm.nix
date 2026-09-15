@@ -21,28 +21,30 @@
 let
   # ── THE OUTBOUND DOOR, as a fact a CONSUMER can read before building ───────
   #
-  # A wasm image serves calls; it cannot yet MAKE one. `lp_client_create` and
-  # `lp_invoke` live in logos_protocol.cpp, which is not in
-  # LOGOS_PROTOCOL_WASM_SOURCES (cpp/CMakeLists.txt) — so a module that calls a
-  # dependency links against nothing and wasm-ld reports an undefined symbol
-  # forty lines into an emcc command, naming neither the module nor the reason.
+  # A wasm image can MAKE a call now, not merely serve one:
+  # implementations/wasm/wasm_lp_abi.cpp defines lp_client_create,
+  # lp_client_destroy and lp_invoke_async over the connection the host installs
+  # (wasm_outbound_door.h). Before that, a module calling a dependency linked
+  # against nothing and wasm-ld reported an undefined symbol forty lines into an
+  # emcc command, naming neither the module nor the reason.
   #
   # logos-module-builder has to know that BEFORE it decides whether a module
   # with dependencies gets a `web` output at all (ADR 0009, gate 2), and "before"
   # means at EVAL time, off the package, without realising it. Hence a passthru
   # boolean rather than anything read out of the archive.
   #
-  # It is `false` for as long as the subset has no client side. The day that
-  # lands, this flips to `true` and every consumer's gate opens with no edit in
-  # any module's flake — which is the whole point of keying the temporary half of
-  # ADR 0009 on the PIN rather than on the module.
-  #
   # A consumer reads it as `pkg.hasOutboundDoor or false`: a pin that predates
   # this attribute is a pin without the door, which is exactly what it means.
-  hasOutboundDoor = false;
+  hasOutboundDoor = true;
 
   # The symbols the claim is about, named once and checked below.
-  outboundDoorSymbols = [ "lp_client_create" "lp_invoke" ];
+  #
+  # lp_invoke — the SYNCHRONOUS twin — is NOT among them and is asserted ABSENT
+  # further down. A Worker is one event loop and this image has no ASYNCIFY
+  # (ADR 0004), so a call that blocked for its reply would deadlock the loop
+  # that delivers it; the sync spelling is refused by being missing, which turns
+  # a module that uses it into a build failure instead of a phone failure.
+  outboundDoorSymbols = [ "lp_client_create" "lp_client_destroy" "lp_invoke_async" ];
 
   # The claim as the installCheck's shell sees it, so the check compares against
   # the same word it prints.
@@ -190,8 +192,25 @@ pkgs.stdenv.mkDerivation {
       fi
     done
 
+    # ── ...and the SYNC twin stays absent ───────────────────────────────────
+    #
+    # The other half of the door's decision, and the one nothing else would
+    # notice. Defining lp_invoke — even as an always-error stub — lets a module
+    # that calls a synchronous dependency wrapper LINK, and it then deadlocks or
+    # errors on a phone instead of failing on the machine that built it. The
+    # absence is the diagnostic, so it is asserted rather than assumed.
+    if grep -Eq "[TDW] lp_invoke\$" syms.txt; then
+      echo "logos-protocol wasm: lp_invoke is DEFINED in the archive."
+      echo "  It must not be. A wasm image is a single event loop without"
+      echo "  ASYNCIFY (ADR 0004): a synchronous call would block the loop that"
+      echo "  delivers its reply. Leaving the symbol undefined is what makes a"
+      echo "  module calling the sync twin fail to BUILD, naming it. Use"
+      echo "  lp_invoke_async."
+      exit 1
+    fi
+
     echo "logos-protocol wasm subset: $(wc -l < syms.txt) symbols," \
-         "outbound door ${doorClaim}, gate OK"
+         "outbound door ${doorClaim}, sync lp_invoke absent, gate OK"
     runHook postInstallCheck
   '';
 
